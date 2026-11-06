@@ -1,0 +1,61 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net: Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Hardened Global Helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // User Profile Document (Isolated, private, no phone numbers)
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow list: if false; // Blanket enumeration forbidden
+      allow create, update: if isOwner(userId)
+        && isValidId(userId)
+        && request.resource.data.uid == userId
+        && (!('phoneNumber' in request.resource.data))
+        && (!('phone' in request.resource.data));
+      allow delete: if isOwner(userId);
+
+      // Workouts Subcollection
+      match /workouts/{workoutId} {
+        allow get, list: if isOwner(userId);
+        allow create: if isOwner(userId)
+          && isValidId(workoutId)
+          && request.resource.data.userId == userId
+          && request.resource.data.title is string
+          && request.resource.data.title.size() <= 150
+          && request.resource.data.distanceKm is number
+          && request.resource.data.durationSec is number;
+        allow update: if isOwner(userId)
+          && isValidId(workoutId)
+          && request.resource.data.userId == userId
+          && resource.data.userId == userId;
+        allow delete: if isOwner(userId)
+          && isValidId(workoutId);
+      }
+
+      // Settings & Goals Subcollection
+      match /settings/{settingId} {
+        allow get, list: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+          && isValidId(settingId);
+        allow delete: if isOwner(userId);
+      }
+    }
+  }
+}

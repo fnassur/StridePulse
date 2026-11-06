@@ -1,0 +1,77 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile with email and display name. No phone numbers stored.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 256 },
+        "displayName": { "type": "string", "maxLength": 128 },
+        "photoURL": { "type": "string", "maxLength": 512 },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["uid", "email"]
+    },
+    "Workout": {
+      "title": "Workout",
+      "description": "Running activity record with GPS telemetry, moving pace, and splits.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 150 },
+        "date": { "type": "string", "maxLength": 64 },
+        "distanceKm": { "type": "number" },
+        "durationSec": { "type": "number" },
+        "movingDurationSec": { "type": "number" },
+        "elapsedDurationSec": { "type": "number" },
+        "timerDurationSec": { "type": "number" },
+        "avgPaceSecKm": { "type": "number" },
+        "avgHeartRate": { "type": "number" },
+        "maxHeartRate": { "type": "number" },
+        "elevationGainM": { "type": "number" },
+        "calories": { "type": "number" },
+        "cadence": { "type": "number" },
+        "avgPower": { "type": "number" },
+        "maxPower": { "type": "number" },
+        "type": { "type": "string", "maxLength": 50 },
+        "source": { "type": "string", "maxLength": 50 },
+        "executionScore": { "type": "number" },
+        "notes": { "type": "string", "maxLength": 2000 },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "userId", "title", "date", "distanceKm", "durationSec"]
+    },
+    "UserGoals": {
+      "title": "UserGoals",
+      "description": "User training volume, cycle start day, race target, and HR zone settings.",
+      "type": "object",
+      "properties": {
+        "weeklyDistanceKm": { "type": "number" },
+        "distanceUnit": { "type": "string", "enum": ["km", "mi"] },
+        "weekStartDay": { "type": "string", "enum": ["monday", "sunday", "saturday"] },
+        "maxHeartRate": { "type": "number" },
+        "restingHeartRate": { "type": "number" },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["weeklyDistanceKm", "distanceUnit"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Private user account profile document."
+    },
+    "/users/{userId}/workouts/{workoutId}": {
+      "schema": "Workout",
+      "description": "User private running activities collection."
+    },
+    "/users/{userId}/settings/goals": {
+      "schema": "UserGoals",
+      "description": "User weekly volume, race target, and cycle configuration."
+    }
+  }
+}

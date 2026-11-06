@@ -1,0 +1,6 @@
+{
+  "name": "StridePulse - Running Tracker & Analytics",
+  "description": "Track running workouts, sync Garmin files (FIT, GPX, TCX), set personal goals, and analyze training load and weekly progress.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

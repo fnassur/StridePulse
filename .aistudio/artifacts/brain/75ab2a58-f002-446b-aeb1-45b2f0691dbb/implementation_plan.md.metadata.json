@@ -1,0 +1,6 @@
+{
+  "summary": "Implementation plan for full Garmin historical data sync, combining cloud historical backfill with selectable time ranges, batch multi-file drag-and-drop, automated duplicate detection, and cloud database persistence.",
+  "updatedAt": "2026-11-06T19:00:50.638340293Z",
+  "requestFeedback": true,
+  "userFacing": true
+}
