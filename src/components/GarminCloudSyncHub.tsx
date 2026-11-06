@@ -1,12 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { GarminCloudAccount, Workout } from '../types/workout';
 import {
-  openGarminOAuthPopup,
-  syncAuthenticGarminActivities,
+  validateGarminPersonalApiKey,
+  pullGarminActivitiesWithPersonalKey,
 } from '../services/garminConnectService';
 import {
   Watch,
-  Cloud,
+  KeyRound,
   CheckCircle2,
   RefreshCw,
   FolderArchive,
@@ -15,8 +15,9 @@ import {
   ExternalLink,
   ChevronRight,
   Info,
-  Link2,
-  Unlink,
+  Eye,
+  EyeOff,
+  Trash2,
 } from 'lucide-react';
 
 interface GarminCloudSyncHubProps {
@@ -36,136 +37,117 @@ export const GarminCloudSyncHub: React.FC<GarminCloudSyncHubProps> = ({
   existingWorkouts,
   onSwitchToZipTab,
 }) => {
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [syncStatusMsg, setSyncStatusMsg] = useState<{ type: 'success' | 'info' | 'error'; text: string } | null>(null);
-  const [showConnectModal, setShowConnectModal] = useState(false);
-  
-  // Connection form inputs
+  const [apiKeyInput, setApiKeyInput] = useState(cloudAccount.personalApiKey || '');
+  const [showKeyText, setShowKeyText] = useState(false);
+  const [deviceNameInput, setDeviceNameInput] = useState(cloudAccount.deviceName || 'Garmin Forerunner');
   const [emailInput, setEmailInput] = useState(cloudAccount.email || '');
-  const [deviceNameInput, setDeviceNameInput] = useState(cloudAccount.deviceName || 'Garmin Watch');
-  const [connectMethod, setConnectMethod] = useState<'oauth' | 'credentials'>('oauth');
-  const [clientIdInput, setClientIdInput] = useState('');
 
-  // Listen for OAuth postMessage callback from popup
-  useEffect(() => {
-    const handleMessage = (event: MessageEvent) => {
-      // Validate origin
-      const origin = event.origin;
-      if (!origin.endsWith('.run.app') && !origin.includes('localhost') && !origin.includes('127.0.0.1')) {
+  // UI state
+  const [isValidatingKey, setIsValidatingKey] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [isEditingKey, setIsEditingKey] = useState(!cloudAccount.personalApiKey);
+  const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'info' | 'error'; text: string } | null>(null);
+
+  // Validate and save Personal API Key
+  const handleSaveApiKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanKey = apiKeyInput.trim();
+
+    if (!cleanKey) {
+      setStatusMsg({ type: 'error', text: 'Please enter your Garmin Connect Personal API Key.' });
+      return;
+    }
+
+    setIsValidatingKey(true);
+    setStatusMsg(null);
+
+    try {
+      const validation = await validateGarminPersonalApiKey(cleanKey);
+
+      if (!validation.isValid || !validation.accessToken) {
+        setStatusMsg({
+          type: 'error',
+          text: validation.error || 'Failed to authenticate with this Personal API Key. Please verify the key in Garmin Connect.',
+        });
+        setIsValidatingKey(false);
         return;
       }
 
-      if (event.data?.type === 'GARMIN_AUTH_SUCCESS') {
-        const email = event.data.email || emailInput || 'Garmin Connected User';
-        const deviceName = event.data.deviceName || deviceNameInput || 'Garmin Watch';
+      // Key is valid! Save to account state
+      const updated: GarminCloudAccount = {
+        ...cloudAccount,
+        isConnected: true,
+        personalApiKey: cleanKey,
+        accessToken: validation.accessToken,
+        tokenExpiresAt: Date.now() + (validation.expiresIn || 3600) * 1000,
+        email: emailInput.trim() || cloudAccount.email || 'Garmin Connect User',
+        deviceName: deviceNameInput.trim() || cloudAccount.deviceName || 'Garmin Watch',
+        lastSyncTime: cloudAccount.lastSyncTime || 'Pending First Sync',
+        autoSync: true,
+        pendingActivitiesCount: 0,
+      };
 
-        onUpdateAccount({
-          isConnected: true,
-          email,
-          deviceName,
-          lastSyncTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          autoSync: true,
-          pendingActivitiesCount: 0,
-        });
-
-        setShowConnectModal(false);
-        setSyncStatusMsg({
-          type: 'success',
-          text: `Garmin Connect authorized successfully for ${email}. You can now sync activities!`,
-        });
-      }
-    };
-
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
-  }, [emailInput, deviceNameInput, onUpdateAccount]);
-
-  // Initiate real OAuth authorization popup
-  const handleLaunchGarminOAuth = () => {
-    const redirectUri = `${window.location.origin}/auth/garmin/callback`;
-    const popup = openGarminOAuthPopup(redirectUri, clientIdInput || undefined);
-
-    if (!popup) {
-      setSyncStatusMsg({
-        type: 'error',
-        text: 'Popup was blocked by your browser. Please allow popups for this site to authorize Garmin Connect.',
+      onUpdateAccount(updated);
+      setIsEditingKey(false);
+      setStatusMsg({
+        type: 'success',
+        text: 'Personal API Key verified and saved! You can now pull authentic activity data directly from Garmin.',
       });
-      return;
+    } catch (err: any) {
+      setStatusMsg({
+        type: 'error',
+        text: err.message || 'Error validating key with Garmin Personal API.',
+      });
+    } finally {
+      setIsValidatingKey(false);
     }
-
-    setSyncStatusMsg({
-      type: 'info',
-      text: 'Garmin Connect authorization popup opened. Sign in to your Garmin account to complete linking.',
-    });
   };
 
-  // Manual Account linking submission
-  const handleSaveConnection = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!emailInput.trim()) {
-      setSyncStatusMsg({ type: 'error', text: 'Please enter your Garmin Connect email or user ID.' });
-      return;
-    }
-
-    onUpdateAccount({
-      isConnected: true,
-      email: emailInput.trim(),
-      deviceName: deviceNameInput.trim() || 'Garmin Watch',
-      lastSyncTime: 'Never',
-      autoSync: true,
-      pendingActivitiesCount: 0,
-    });
-
-    setShowConnectModal(false);
-    setSyncStatusMsg({
-      type: 'success',
-      text: `Garmin Connect linked to ${emailInput.trim()} (${deviceNameInput.trim() || 'Garmin Watch'}).`,
-    });
-  };
-
-  // Trigger real sync from Garmin Connect
-  const handleSyncLatest = async () => {
-    if (!cloudAccount.isConnected) {
-      setShowConnectModal(true);
+  // Pull authentic activities from Garmin using Personal API Key
+  const handlePullActivities = async () => {
+    if (!cloudAccount.personalApiKey) {
+      setIsEditingKey(true);
+      setStatusMsg({ type: 'error', text: 'Please save your Garmin Personal API Key first.' });
       return;
     }
 
     setIsSyncing(true);
-    setSyncStatusMsg(null);
+    setStatusMsg(null);
 
     try {
-      const result = await syncAuthenticGarminActivities(cloudAccount, existingWorkouts, 30);
+      const result = await pullGarminActivitiesWithPersonalKey(cloudAccount, existingWorkouts, 50);
 
       if (result.newActivities.length > 0) {
         onImportNewRuns(result.newActivities);
-        setSyncStatusMsg({
+        setStatusMsg({
           type: 'success',
-          text: `Synced ${result.newActivities.length} authentic run(s) from Garmin Connect!`,
+          text: `Successfully imported ${result.newActivities.length} authentic run(s) from Garmin Connect!`,
         });
       } else {
-        setSyncStatusMsg({
+        setStatusMsg({
           type: 'info',
-          text: result.message || 'Garmin Connect checked: No new activities found since last sync.',
+          text: result.message || 'Garmin Connect checked: No new activities found on your account.',
         });
       }
 
+      // Update sync timestamp
       onUpdateAccount({
         ...cloudAccount,
         lastSyncTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         pendingActivitiesCount: 0,
       });
     } catch (err: any) {
-      setSyncStatusMsg({
+      setStatusMsg({
         type: 'error',
-        text: err.message || 'Error communicating with Garmin Connect.',
+        text: err.message || 'Error fetching activities from Garmin Personal API.',
       });
     } finally {
       setIsSyncing(false);
     }
   };
 
-  // Disconnect Garmin account
-  const handleDisconnect = () => {
+  // Disconnect / Remove Key
+  const handleRemoveKey = () => {
     onUpdateAccount({
       isConnected: false,
       email: '',
@@ -173,144 +155,268 @@ export const GarminCloudSyncHub: React.FC<GarminCloudSyncHubProps> = ({
       lastSyncTime: '',
       autoSync: false,
       pendingActivitiesCount: 0,
+      personalApiKey: undefined,
+      accessToken: undefined,
+      tokenExpiresAt: undefined,
     });
-    setSyncStatusMsg({
+    setApiKeyInput('');
+    setIsEditingKey(true);
+    setStatusMsg({
       type: 'info',
-      text: 'Garmin Connect account disconnected.',
+      text: 'Garmin Personal API Key removed.',
     });
   };
 
+  const maskedKey = cloudAccount.personalApiKey
+    ? `${cloudAccount.personalApiKey.slice(0, 6)}••••••••${cloudAccount.personalApiKey.slice(-4)}`
+    : '';
+
   return (
     <div className="space-y-6">
-      {/* Connection Status Card */}
+      {/* Overview & Key Status Card */}
       <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 shadow-xs">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800">
           <div className="flex items-center gap-3">
             <div
               className={`flex h-10 w-10 items-center justify-center rounded-xl shadow-xs ${
-                cloudAccount.isConnected
+                cloudAccount.isConnected && cloudAccount.personalApiKey
                   ? 'bg-emerald-500 text-white'
-                  : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+                  : 'bg-orange-100 text-orange-600 dark:bg-orange-950/60 dark:text-orange-400'
               }`}
             >
-              <Cloud className="h-5 w-5" />
+              <KeyRound className="h-5 w-5" />
             </div>
 
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="font-display text-base font-bold text-slate-900 dark:text-white">
-                  Garmin Connect Cloud Integration
+                  Garmin Connect Personal API
                 </h3>
-                {cloudAccount.isConnected ? (
+                {cloudAccount.isConnected && cloudAccount.personalApiKey ? (
                   <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
                     <CheckCircle2 className="h-3 w-3" />
-                    <span>Linked</span>
+                    <span>API Key Active</span>
                   </span>
                 ) : (
                   <span className="text-[11px] font-semibold text-slate-400">
-                    Not Linked
+                    Key Required
                   </span>
                 )}
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Direct activity synchronization with your official Garmin Connect profile
+                Direct pull flow using your self-generated Garmin Personal API Key
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            {cloudAccount.isConnected ? (
+            {cloudAccount.isConnected && cloudAccount.personalApiKey ? (
               <>
                 <button
                   type="button"
-                  onClick={handleSyncLatest}
+                  onClick={handlePullActivities}
                   disabled={isSyncing}
                   className="flex items-center gap-1.5 rounded-lg bg-orange-600 px-3.5 py-2 text-xs font-semibold text-white shadow-xs hover:bg-orange-500 disabled:opacity-60 transition-colors"
                 >
                   <RefreshCw className={`h-3.5 w-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                  <span>{isSyncing ? 'Checking Garmin...' : 'Sync Latest Runs'}</span>
+                  <span>{isSyncing ? 'Pulling Activities...' : 'Pull Activities'}</span>
                 </button>
                 <button
                   type="button"
-                  onClick={handleDisconnect}
-                  className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-800 dark:text-slate-400 dark:hover:bg-slate-800 transition-colors"
+                  onClick={() => setIsEditingKey(!isEditingKey)}
+                  className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-800 dark:text-slate-400 dark:hover:bg-slate-800 transition-colors"
                 >
-                  <Unlink className="h-3.5 w-3.5" />
-                  <span>Disconnect</span>
+                  {isEditingKey ? 'Close Key Settings' : 'Edit Key'}
                 </button>
               </>
             ) : (
               <button
                 type="button"
-                onClick={() => setShowConnectModal(true)}
+                onClick={() => setIsEditingKey(true)}
                 className="flex items-center gap-2 rounded-lg bg-orange-600 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-orange-500 transition-colors"
               >
-                <Link2 className="h-4 w-4" />
-                <span>Link Garmin Account</span>
+                <KeyRound className="h-4 w-4" />
+                <span>Configure Personal API Key</span>
               </button>
             )}
           </div>
         </div>
 
-        {/* Sync Status Banner */}
-        {syncStatusMsg && (
+        {/* Status Notification Message */}
+        {statusMsg && (
           <div
             className={`mt-4 flex items-start gap-2.5 rounded-lg p-3 text-xs border ${
-              syncStatusMsg.type === 'success'
+              statusMsg.type === 'success'
                 ? 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800'
-                : syncStatusMsg.type === 'error'
+                : statusMsg.type === 'error'
                 ? 'bg-rose-50 text-rose-800 border-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800'
                 : 'bg-blue-50 text-blue-800 border-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800'
             }`}
           >
-            {syncStatusMsg.type === 'success' ? (
+            {statusMsg.type === 'success' ? (
               <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600 mt-0.5" />
-            ) : syncStatusMsg.type === 'error' ? (
+            ) : statusMsg.type === 'error' ? (
               <AlertCircle className="h-4 w-4 shrink-0 text-rose-600 mt-0.5" />
             ) : (
               <Info className="h-4 w-4 shrink-0 text-blue-600 mt-0.5" />
             )}
-            <span className="leading-relaxed">{syncStatusMsg.text}</span>
+            <span className="leading-relaxed">{statusMsg.text}</span>
           </div>
         )}
 
-        {/* Connected Device Details */}
-        {cloudAccount.isConnected ? (
+        {/* Connected Details Grid */}
+        {cloudAccount.isConnected && cloudAccount.personalApiKey && !isEditingKey && (
           <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs font-mono">
             <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800">
-              <span className="text-[10px] text-slate-400 block font-sans">Garmin Watch Device</span>
+              <span className="text-[10px] text-slate-400 block font-sans">Personal API Key</span>
+              <span className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5 mt-0.5">
+                <KeyRound className="h-3.5 w-3.5 text-orange-500" />
+                {maskedKey}
+              </span>
+            </div>
+
+            <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800">
+              <span className="text-[10px] text-slate-400 block font-sans">Garmin Device</span>
               <span className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5 mt-0.5">
                 <Watch className="h-3.5 w-3.5 text-orange-500" />
-                {cloudAccount.deviceName || 'Garmin Device'}
+                {cloudAccount.deviceName || 'Garmin Watch'}
               </span>
             </div>
 
             <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800">
-              <span className="text-[10px] text-slate-400 block font-sans">Linked Garmin ID</span>
-              <span className="font-bold text-slate-900 dark:text-white truncate block mt-0.5">
-                {cloudAccount.email}
-              </span>
-            </div>
-
-            <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800">
-              <span className="text-[10px] text-slate-400 block font-sans">Last Cloud Sync</span>
+              <span className="text-[10px] text-slate-400 block font-sans">Last Activities Pull</span>
               <span className="font-bold text-slate-900 dark:text-white block mt-0.5">
                 {cloudAccount.lastSyncTime || 'Pending First Sync'}
               </span>
             </div>
           </div>
-        ) : (
-          <div className="mt-4 p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800/60 text-xs text-slate-600 dark:text-slate-300 leading-relaxed space-y-2">
-            <p className="font-semibold text-slate-800 dark:text-slate-100 flex items-center gap-2">
-              <Info className="h-4 w-4 text-orange-500" />
-              <span>How authentic Garmin syncing works:</span>
-            </p>
-            <p>
-              Link your Garmin Connect account to pull genuine activity data directly from your watch into StridePulse. All workouts are saved securely to your private Firestore database.
-            </p>
-          </div>
         )}
       </div>
+
+      {/* API Key Setup / Edit Form */}
+      {isEditingKey && (
+        <form
+          onSubmit={handleSaveApiKey}
+          className="rounded-xl border border-orange-200 bg-orange-50/40 p-5 dark:border-orange-950 dark:bg-orange-950/20 space-y-4"
+        >
+          <div className="flex items-center justify-between border-b border-orange-200/60 pb-3 dark:border-orange-900/60">
+            <div className="flex items-center gap-2">
+              <KeyRound className="h-4 w-4 text-orange-600 dark:text-orange-400" />
+              <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                Enter Your Garmin Personal API Key
+              </h4>
+            </div>
+            {cloudAccount.personalApiKey && (
+              <button
+                type="button"
+                onClick={() => setIsEditingKey(false)}
+                className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+              >
+                Cancel
+              </button>
+            )}
+          </div>
+
+          {/* Step-by-Step Instructions */}
+          <div className="rounded-lg bg-white p-3.5 border border-orange-100 dark:bg-slate-900 dark:border-slate-800 space-y-2 text-xs">
+            <div className="font-semibold text-slate-800 dark:text-slate-200 flex items-center justify-between">
+              <span>How to generate your key in Garmin Connect:</span>
+              <a
+                href="https://connect.garmin.com/modern/settings/personal-api-key"
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-[11px] font-bold text-orange-600 hover:underline dark:text-orange-400"
+              >
+                <span>Open Garmin Connect API Settings</span>
+                <ExternalLink className="h-3 w-3" />
+              </a>
+            </div>
+            <ol className="list-decimal list-inside space-y-1 text-slate-500 dark:text-slate-400 text-[11px] leading-relaxed">
+              <li>Log in to Garmin Connect Web and navigate to <strong>Profile &amp; Account &rarr; Account Settings &rarr; Personal API Key</strong>.</li>
+              <li>Click <strong>Create Key</strong>, accept the terms, and choose an expiration period.</li>
+              <li>Copy your generated Personal API Key and paste it into the field below.</li>
+            </ol>
+          </div>
+
+          {/* Input field */}
+          <div>
+            <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
+              Personal API Key
+            </label>
+            <div className="relative">
+              <input
+                type={showKeyText ? 'text' : 'password'}
+                value={apiKeyInput}
+                onChange={e => setApiKeyInput(e.target.value)}
+                placeholder="Paste your Garmin Personal API Key here..."
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 pr-10 text-xs text-slate-900 dark:border-slate-800 dark:bg-slate-800 dark:text-white font-mono"
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowKeyText(!showKeyText)}
+                className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                title={showKeyText ? 'Hide Key' : 'Show Key'}
+              >
+                {showKeyText ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
+                Garmin Watch Model (Optional)
+              </label>
+              <input
+                type="text"
+                value={deviceNameInput}
+                onChange={e => setDeviceNameInput(e.target.value)}
+                placeholder="e.g. Forerunner 965, Fenix 8"
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-900 dark:border-slate-800 dark:bg-slate-800 dark:text-white"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
+                Garmin Account Email (Optional)
+              </label>
+              <input
+                type="email"
+                value={emailInput}
+                onChange={e => setEmailInput(e.target.value)}
+                placeholder="your-email@example.com"
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-900 dark:border-slate-800 dark:bg-slate-800 dark:text-white font-mono"
+              />
+            </div>
+          </div>
+
+          {/* Form action buttons */}
+          <div className="flex items-center justify-between pt-2">
+            <div>
+              {cloudAccount.personalApiKey && (
+                <button
+                  type="button"
+                  onClick={handleRemoveKey}
+                  className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 dark:text-rose-400 font-medium"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  <span>Remove Key</span>
+                </button>
+              )}
+            </div>
+
+            <button
+              type="submit"
+              disabled={isValidatingKey}
+              className="flex items-center gap-1.5 rounded-lg bg-orange-600 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-orange-500 disabled:opacity-60 transition-colors"
+            >
+              <ShieldCheck className="h-4 w-4" />
+              <span>{isValidatingKey ? 'Validating Key...' : 'Verify & Save Key'}</span>
+            </button>
+          </div>
+        </form>
+      )}
 
       {/* Historical Data & Batch ZIP Ingestion Guidance */}
       <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 shadow-xs space-y-4">
@@ -321,10 +427,10 @@ export const GarminCloudSyncHub: React.FC<GarminCloudSyncHubProps> = ({
             </div>
             <div>
               <h4 className="text-sm font-bold text-slate-900 dark:text-white">
-                Historical Activity Import &amp; Multi-Year Archives
+                Multi-Year History &amp; ZIP Archive Ingestion
               </h4>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Import your entire multi-year running history without API rate limits or mock data
+                Pull recent activities via Personal API, or drag and drop your full Garmin archive
               </p>
             </div>
           </div>
@@ -344,11 +450,11 @@ export const GarminCloudSyncHub: React.FC<GarminCloudSyncHubProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
           <div className="rounded-lg bg-slate-50 p-3.5 border border-slate-200/80 dark:bg-slate-800/50 dark:border-slate-700/60 space-y-1.5">
             <div className="flex items-center gap-2 font-bold text-slate-900 dark:text-white">
-              <Cloud className="h-4 w-4 text-orange-500" />
-              <span>Live Cloud Feed</span>
+              <KeyRound className="h-4 w-4 text-orange-500" />
+              <span>Personal API Pull Flow</span>
             </div>
             <p className="text-slate-500 dark:text-slate-400 text-[11px] leading-relaxed">
-              Use the <strong>"Sync Latest Runs"</strong> button above whenever you finish a new workout on your watch. It queries Garmin Connect for newly uploaded activities and pushes them directly to your Firestore database.
+              Your Personal API Key allows StridePulse to pull your latest completed workouts on demand. When you finish a run on your watch and sync with your phone, click <strong>"Pull Activities"</strong> to ingest them into your private Firestore database.
             </p>
           </div>
 
@@ -358,144 +464,11 @@ export const GarminCloudSyncHub: React.FC<GarminCloudSyncHubProps> = ({
               <span>Complete Historical ZIP Archive</span>
             </div>
             <p className="text-slate-500 dark:text-slate-400 text-[11px] leading-relaxed">
-              To import years of historical Garmin activities at once, export your archive from Garmin Connect (<code className="font-mono text-[10px] bg-slate-200 dark:bg-slate-700 px-1 py-0.5 rounded">.ZIP</code>) and drop it into the <strong>Batch Files &amp; ZIP Archive</strong> tab. StridePulse extracts and parses all FIT activities automatically.
+              If you have years of past runs, the fastest route is exporting your Garmin Connect data archive (<code className="font-mono text-[10px] bg-slate-200 dark:bg-slate-700 px-1 py-0.5 rounded">.ZIP</code>) and dropping it into the <strong>Batch Files &amp; ZIP Archive</strong> tab. All historical FIT activities are parsed with authentic GPS coordinates, laps, and cadence.
             </p>
           </div>
         </div>
       </div>
-
-      {/* Link Account Modal / Configuration Form */}
-      {showConnectModal && (
-        <div className="rounded-xl border border-orange-200 bg-orange-50/40 p-5 dark:border-orange-950 dark:bg-orange-950/20 space-y-4">
-          <div className="flex items-center justify-between border-b border-orange-200/60 pb-3 dark:border-orange-900/60">
-            <div className="flex items-center gap-2">
-              <ShieldCheck className="h-5 w-5 text-emerald-500" />
-              <h4 className="text-sm font-bold text-slate-900 dark:text-white">
-                Link Real Garmin Connect Account
-              </h4>
-            </div>
-            <button
-              type="button"
-              onClick={() => setShowConnectModal(false)}
-              className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-            >
-              Cancel
-            </button>
-          </div>
-
-          {/* Linking Method Tabs */}
-          <div className="flex gap-2 border-b border-orange-200/40 pb-2">
-            <button
-              type="button"
-              onClick={() => setConnectMethod('oauth')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                connectMethod === 'oauth'
-                  ? 'bg-orange-600 text-white shadow-xs'
-                  : 'text-slate-600 dark:text-slate-300 hover:bg-orange-100/50 dark:hover:bg-slate-800'
-              }`}
-            >
-              Garmin Connect OAuth
-            </button>
-            <button
-              type="button"
-              onClick={() => setConnectMethod('credentials')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                connectMethod === 'credentials'
-                  ? 'bg-orange-600 text-white shadow-xs'
-                  : 'text-slate-600 dark:text-slate-300 hover:bg-orange-100/50 dark:hover:bg-slate-800'
-              }`}
-            >
-              Garmin Account ID
-            </button>
-          </div>
-
-          {connectMethod === 'oauth' ? (
-            <div className="space-y-4">
-              <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-                Connect directly through Garmin's OAuth portal. When you click below, an authorization window will open directly to Garmin Connect to authorize activity access.
-              </p>
-
-              <div>
-                <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
-                  Garmin OAuth Client ID (Optional if set in environment)
-                </label>
-                <input
-                  type="text"
-                  value={clientIdInput}
-                  onChange={e => setClientIdInput(e.target.value)}
-                  placeholder="Leave blank to use default application Client ID"
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 dark:border-slate-800 dark:bg-slate-800 dark:text-white font-mono"
-                />
-              </div>
-
-              <div className="flex items-center justify-between pt-2">
-                <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Callback URL: <code className="font-mono text-[10px]">{window.location.origin}/auth/garmin/callback</code>
-                </span>
-                <button
-                  type="button"
-                  onClick={handleLaunchGarminOAuth}
-                  className="flex items-center gap-1.5 rounded-lg bg-orange-600 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-orange-500 transition-colors"
-                >
-                  <ExternalLink className="h-3.5 w-3.5" />
-                  <span>Open Garmin Authorization</span>
-                </button>
-              </div>
-            </div>
-          ) : (
-            <form onSubmit={handleSaveConnection} className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
-                    Garmin Connect Email / Username
-                  </label>
-                  <input
-                    type="email"
-                    value={emailInput}
-                    onChange={e => setEmailInput(e.target.value)}
-                    placeholder="your-email@example.com"
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 dark:border-slate-800 dark:bg-slate-800 dark:text-white font-mono"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
-                    Garmin Watch Model
-                  </label>
-                  <select
-                    value={deviceNameInput}
-                    onChange={e => setDeviceNameInput(e.target.value)}
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 dark:border-slate-800 dark:bg-slate-800 dark:text-white"
-                  >
-                    <option value="Garmin Forerunner 965">Garmin Forerunner 965</option>
-                    <option value="Garmin Forerunner 265 / 255">Garmin Forerunner 265 / 255</option>
-                    <option value="Garmin Forerunner 165 / 55">Garmin Forerunner 165 / 55</option>
-                    <option value="Garmin Fenix 7 / 8">Garmin Fenix 7 / 8</option>
-                    <option value="Garmin Epix Gen 2">Garmin Epix Gen 2</option>
-                    <option value="Garmin Enduro 2 / 3">Garmin Enduro 2 / 3</option>
-                    <option value="Garmin Venu 3 / Sq">Garmin Venu 3 / Sq</option>
-                    <option value="Garmin Instinct 2 / Solar">Garmin Instinct 2 / Solar</option>
-                    <option value="Other Garmin Device">Other Garmin Device</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between pt-2">
-                <span className="text-[11px] text-slate-500">
-                  Links this profile to authenticate with Garmin Connect
-                </span>
-                <button
-                  type="submit"
-                  className="rounded-lg bg-orange-600 px-4 py-2 text-xs font-bold text-white hover:bg-orange-500 shadow-xs transition-colors"
-                >
-                  Link Account
-                </button>
-              </div>
-            </form>
-          )}
-        </div>
-      )}
     </div>
   );
 };

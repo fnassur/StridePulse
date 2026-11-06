@@ -1,4 +1,4 @@
-import { Workout, GarminCloudAccount, LapSplit } from '../types/workout';
+import { Workout, GarminCloudAccount, LapSplit, WorkoutType } from '../types/workout';
 import { deduplicateWorkouts } from '../utils/deduplication';
 
 export interface GarminSyncResult {
@@ -7,109 +7,190 @@ export interface GarminSyncResult {
   message: string;
 }
 
+export interface GarminTokenResponse {
+  accessToken: string;
+  tokenType?: string;
+  expiresIn?: number;
+  refreshToken?: string;
+}
+
+const BASE_PROXY_URL = '/api/garmin';
+const DIRECT_GARMIN_URL = 'https://personal.connectapi.garmin.com';
+
 /**
- * Initiates the real Garmin Connect OAuth 2.0 / Direct Authorization flow.
- * Opens the Garmin Connect authorization dialog in a dedicated popup.
+ * Helper to make requests to Garmin Personal API, preferring the local proxy to bypass CORS,
+ * with fallback to direct API if running in an environment without proxy.
  */
-export function openGarminOAuthPopup(redirectUri: string, clientId?: string): Window | null {
-  const actualClientId = clientId || (import.meta.env.VITE_GARMIN_CLIENT_ID as string) || 'garmin_connect_stridepulse';
-  
-  const params = new URLSearchParams({
-    client_id: actualClientId,
-    redirect_uri: redirectUri,
-    response_type: 'code',
-    scope: 'activity:read',
-    state: 'garmin_sync_' + Date.now(),
-  });
+async function fetchGarminApi(endpoint: string, options: RequestInit = {}): Promise<Response> {
+  const proxyUrl = `${BASE_PROXY_URL}${endpoint}`;
+  try {
+    const res = await fetch(proxyUrl, options);
+    // If proxy responds (even with 4xx/5xx from Garmin), return it
+    if (res.status !== 404 && res.status !== 502) {
+      return res;
+    }
+  } catch {
+    // Proxy request failed, attempt direct
+  }
 
-  const garminAuthUrl = `https://connect.garmin.com/oauthConfirm?${params.toString()}`;
-
-  const popup = window.open(
-    garminAuthUrl,
-    'garmin_oauth_popup',
-    'width=600,height=750,left=200,top=100'
-  );
-
-  return popup;
+  // Direct fetch fallback
+  const directUrl = `${DIRECT_GARMIN_URL}${endpoint}`;
+  return fetch(directUrl, options);
 }
 
 /**
- * Normalizes a raw Garmin Connect activity object into the standard StridePulse Workout schema.
+ * Validates a Garmin Connect Personal API Key by attempting to generate a temporary access token.
+ * Garmin Connect Personal API documentation:
+ * POST /personalapitoken-service/personal-api/personal-api-key/token
+ * Header: Authorization: ApiKey <your-personal-api-key>
  */
-export function parseGarminConnectActivity(raw: any): Workout | null {
+export async function validateGarminPersonalApiKey(apiKey: string): Promise<{
+  isValid: boolean;
+  accessToken?: string;
+  expiresIn?: number;
+  error?: string;
+}> {
+  const cleanKey = apiKey.trim();
+  if (!cleanKey) {
+    return { isValid: false, error: 'Please enter a valid Personal API Key.' };
+  }
+
+  try {
+    const response = await fetchGarminApi('/personalapitoken-service/personal-api/personal-api-key/token', {
+      method: 'POST',
+      headers: {
+        'Authorization': `ApiKey ${cleanKey}`,
+        'Accept': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        return {
+          isValid: false,
+          error: 'Authentication failed. Please check that your Personal API Key is active and has not expired.',
+        };
+      }
+      return {
+        isValid: false,
+        error: `Garmin API error (${response.status}). Please check your key or try again in a moment.`,
+      };
+    }
+
+    const data = await response.json();
+    const accessToken = data.accessToken || data.access_token || data.token;
+
+    if (!accessToken) {
+      return {
+        isValid: false,
+        error: 'Received unexpected response format from Garmin Personal API.',
+      };
+    }
+
+    return {
+      isValid: true,
+      accessToken,
+      expiresIn: data.expiresIn || data.expires_in || 3600,
+    };
+  } catch (err: any) {
+    return {
+      isValid: false,
+      error: err.message || 'Network error reaching Garmin Connect Personal API.',
+    };
+  }
+}
+
+/**
+ * Normalizes a raw Garmin Personal API activity object into the standard StridePulse Workout schema.
+ */
+export function parseGarminPersonalActivity(raw: any): Workout | null {
   if (!raw) return null;
 
-  // Verify activity is a running type or sports activity
-  const activityType = (raw.activityType?.typeKey || raw.activityType || raw.type || 'running').toLowerCase();
-  const isRunning =
-    activityType.includes('running') ||
-    activityType.includes('run') ||
-    activityType.includes('trail') ||
-    activityType.includes('treadmill') ||
-    activityType.includes('track');
+  // Filter for running activity types
+  const rawType = (
+    raw.activityType?.typeKey ||
+    raw.activityTypeDTO?.typeKey ||
+    raw.activityType ||
+    raw.sportType ||
+    'running'
+  ).toString().toLowerCase();
 
+  const isRunning =
+    rawType.includes('run') ||
+    rawType.includes('trail') ||
+    rawType.includes('treadmill') ||
+    rawType.includes('track');
+
+  // Skip non-running workouts if activityType is clearly specified
   if (!isRunning && raw.activityType) {
-    // Only ingest running workouts as requested
     return null;
   }
 
   const id = `garmin_${raw.activityId || raw.id || Date.now()}`;
-  const title = raw.activityName || raw.activityName || raw.title || 'Garmin Running Activity';
-  const date = raw.startTimeGMT || raw.startTimeLocal || raw.date || new Date().toISOString();
+  const title = raw.activityName || raw.name || raw.title || 'Garmin Running Activity';
+  const date = raw.startTimeGMT || raw.startTimeLocal || raw.beginTimestamp || new Date().toISOString();
 
-  // Distance in meters converted to km
+  // Distance in meters to km
   const rawDistM = raw.distance || 0;
   const distanceKm = Number((rawDistM > 100 ? rawDistM / 1000 : rawDistM).toFixed(3));
 
-  // Time in seconds
+  // Durations in seconds
   const movingDurationSec = Math.round(raw.movingDuration || raw.duration || 0);
   const elapsedDurationSec = Math.round(raw.elapsedDuration || raw.duration || movingDurationSec);
   const timerDurationSec = Math.round(raw.duration || movingDurationSec);
   const stoppedDurationSec = Math.max(0, elapsedDurationSec - movingDurationSec);
 
-  // Pace calculations
-  const avgPaceSecKm = distanceKm > 0.05 ? Math.round(movingDurationSec / distanceKm) : 330;
-  const elapsedPaceSecKm = distanceKm > 0.05 ? Math.round(elapsedDurationSec / distanceKm) : avgPaceSecKm;
+  // Moving pace as primary
+  const avgPaceSecKm = distanceKm > 0.05
+    ? Math.round(movingDurationSec / distanceKm)
+    : (raw.averageSpeed ? Math.round(1000 / raw.averageSpeed) : 330);
+
+  const elapsedPaceSecKm = distanceKm > 0.05
+    ? Math.round(elapsedDurationSec / distanceKm)
+    : avgPaceSecKm;
 
   // Telemetry metrics
-  const avgHeartRate = raw.averageHR || raw.avgHeartRate || undefined;
-  const maxHeartRate = raw.maxHR || raw.maxHeartRate || undefined;
-  const avgCadence = raw.averageRunningCadenceInStepsPerMinute || raw.avgCadence || undefined;
-  const avgPower = raw.avgPower || raw.averagePower || undefined;
-  const maxPower = raw.maxPower || undefined;
+  const avgHeartRate = raw.averageHR ? Math.round(raw.averageHR) : (raw.avgHeartRate ? Math.round(raw.avgHeartRate) : undefined);
+  const maxHeartRate = raw.maxHR ? Math.round(raw.maxHR) : (raw.maxHeartRate ? Math.round(raw.maxHeartRate) : undefined);
+  const avgCadence = raw.averageRunningCadenceInStepsPerMinute
+    ? Math.round(raw.averageRunningCadenceInStepsPerMinute)
+    : (raw.avgCadence ? Math.round(raw.avgCadence) : undefined);
+  const avgPower = raw.avgPower ? Math.round(raw.avgPower) : (raw.averagePower ? Math.round(raw.averagePower) : undefined);
+  const maxPower = raw.maxPower ? Math.round(raw.maxPower) : undefined;
   const elevationGainM = Math.round(raw.elevationGain || raw.totalElevationGain || 0);
   const calories = Math.round(raw.calories || distanceKm * 65);
 
-  // Parse splits/laps if provided by Garmin API
+  // Parse splits / laps if present
   const splits: LapSplit[] = [];
-  if (Array.isArray(raw.laps)) {
-    raw.laps.forEach((lap: any, idx: number) => {
-      const lapDist = (lap.distance || 0) / 1000;
-      const lapMoving = lap.movingDuration || lap.duration || 0;
+  const rawLaps = raw.laps || raw.splitSummaries || raw.lapDTOs;
+  if (Array.isArray(rawLaps)) {
+    rawLaps.forEach((lap: any, idx: number) => {
+      const lapDist = (lap.distance || 0) > 100 ? (lap.distance || 0) / 1000 : (lap.distance || 0);
+      const lapMoving = Math.round(lap.movingDuration || lap.duration || 0);
       splits.push({
         splitNumber: idx + 1,
         distanceKm: Number(lapDist.toFixed(2)),
-        durationSec: Math.round(lapMoving),
-        movingDurationSec: Math.round(lapMoving),
+        durationSec: lapMoving,
+        movingDurationSec: lapMoving,
         elapsedDurationSec: Math.round(lap.elapsedDuration || lapMoving),
         paceSecKm: lapDist > 0.05 ? Math.round(lapMoving / lapDist) : avgPaceSecKm,
         elevationDeltaM: Math.round(lap.elevationGain || 0),
-        avgHeartRate: lap.averageHR,
-        avgCadence: lap.averageRunningCadenceInStepsPerMinute,
+        avgHeartRate: lap.averageHR ? Math.round(lap.averageHR) : undefined,
+        avgCadence: lap.averageRunningCadenceInStepsPerMinute ? Math.round(lap.averageRunningCadenceInStepsPerMinute) : undefined,
       });
     });
   }
 
-  // Determine workout type
-  let type: Workout['type'] = 'easy';
+  // Infer workout type
+  let type: WorkoutType = 'easy';
   const lowerTitle = title.toLowerCase();
   if (lowerTitle.includes('tempo') || lowerTitle.includes('threshold')) {
     type = 'tempo';
-  } else if (lowerTitle.includes('interval') || lowerTitle.includes('repeat') || lowerTitle.includes('track') || lowerTitle.includes('vo2')) {
+  } else if (lowerTitle.includes('interval') || lowerTitle.includes('repeat') || lowerTitle.includes('vo2') || lowerTitle.includes('track')) {
     type = 'interval';
   } else if (lowerTitle.includes('long') || distanceKm >= 18) {
     type = 'long';
-  } else if (lowerTitle.includes('race') || lowerTitle.includes('5k') || lowerTitle.includes('10k') || lowerTitle.includes('half') || lowerTitle.includes('marathon')) {
+  } else if (lowerTitle.includes('race') || lowerTitle.includes('marathon') || lowerTitle.includes('10k') || lowerTitle.includes('5k')) {
     type = 'race';
   } else if (lowerTitle.includes('trail') || lowerTitle.includes('hill')) {
     type = 'trail';
@@ -138,77 +219,111 @@ export function parseGarminConnectActivity(raw: any): Workout | null {
     avgCadence,
     calories,
     perceivedEffort: 6,
-    notes: `Authentic activity synced from Garmin Connect (${raw.deviceName || 'Garmin Watch'}).`,
+    notes: `Authentic run pulled via Garmin Connect Personal API (Activity ID: ${raw.activityId || 'N/A'}).`,
     source: 'garmin_cloud',
-    sourceFileName: raw.activityId ? `activity_${raw.activityId}.fit` : 'Garmin-Connect-Live',
+    sourceFileName: raw.activityId ? `garmin_personal_${raw.activityId}.fit` : 'Garmin-Personal-API',
     trackPoints: [],
     splits,
   };
 }
 
 /**
- * Connects to the user's authentic Garmin Connect feed and imports new runs.
- * If no runs are found or the cloud account is up to date, returns an accurate message with 0 fake runs.
+ * Connects to Garmin Connect Personal API using the user's personal API key,
+ * generates an access token, fetches authentic activities, and parses them.
  */
-export async function syncAuthenticGarminActivities(
+export async function pullGarminActivitiesWithPersonalKey(
   account: GarminCloudAccount,
   existingWorkouts: Workout[],
-  timeWindowDays: number = 30
+  limit: number = 50
 ): Promise<GarminSyncResult> {
-  if (!account.isConnected) {
-    throw new Error('Please link your Garmin Connect account first.');
+  const apiKey = account.personalApiKey?.trim();
+  if (!apiKey) {
+    throw new Error('No Garmin Personal API Key provided. Please paste your Personal API Key to sync.');
   }
 
-  try {
-    // Check if authentic Garmin activities endpoint or session is configured
-    // If backend proxy endpoint /api/garmin/activities is available, query it
-    let rawActivities: any[] = [];
+  // Step 1: Obtain active access token
+  let token = account.accessToken;
+  const isTokenExpired = !account.tokenExpiresAt || Date.now() > account.tokenExpiresAt - 60000;
 
-    try {
-      const response = await fetch(`/api/garmin/activities?email=${encodeURIComponent(account.email)}&days=${timeWindowDays}`, {
-        headers: {
-          'Accept': 'application/json',
-        },
-      });
+  if (!token || isTokenExpired) {
+    const tokenResult = await validateGarminPersonalApiKey(apiKey);
+    if (!tokenResult.isValid || !tokenResult.accessToken) {
+      throw new Error(tokenResult.error || 'Failed to authenticate with your Garmin Personal API Key.');
+    }
+    token = tokenResult.accessToken;
+  }
 
-      if (response.ok) {
-        const data = await response.json();
-        if (Array.isArray(data)) {
-          rawActivities = data;
-        } else if (Array.isArray(data.activities)) {
-          rawActivities = data.activities;
+  // Step 2: Query Garmin activity search endpoint
+  // GET /activitylist-service/activities/search/activities?limit=50&start=0
+  const searchEndpoint = `/activitylist-service/activities/search/activities?limit=${limit}&start=0`;
+  const response = await fetchGarminApi(searchEndpoint, {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Accept': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    if (response.status === 401 || response.status === 403) {
+      // Token might be rejected, try re-authenticating once with the API key
+      const retryToken = await validateGarminPersonalApiKey(apiKey);
+      if (retryToken.isValid && retryToken.accessToken) {
+        const retryRes = await fetchGarminApi(searchEndpoint, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${retryToken.accessToken}`,
+            'Accept': 'application/json',
+          },
+        });
+        if (retryRes.ok) {
+          const rawData = await retryRes.json();
+          return processRawGarminActivities(rawData, existingWorkouts);
         }
       }
-    } catch {
-      // In standalone client preview, no backend server route is active
+      throw new Error('Garmin session expired. Please verify or update your Personal API Key.');
     }
-
-    // Parse authentic activities
-    const parsedWorkouts: Workout[] = [];
-    for (const raw of rawActivities) {
-      const w = parseGarminConnectActivity(raw);
-      if (w) parsedWorkouts.push(w);
-    }
-
-    if (parsedWorkouts.length === 0) {
-      return {
-        newActivities: [],
-        duplicatesCount: 0,
-        message: `Garmin Connect checked: No new activities found on ${account.email || 'your account'} since last sync.`,
-      };
-    }
-
-    // Deduplicate against existing workouts
-    const { unique, duplicateCount } = deduplicateWorkouts(parsedWorkouts, existingWorkouts);
-
-    return {
-      newActivities: unique,
-      duplicatesCount: duplicateCount,
-      message: unique.length > 0
-        ? `Successfully synced ${unique.length} authentic run(s) from your Garmin watch!`
-        : `All ${duplicateCount} activities from your Garmin account are already present in your training log.`,
-    };
-  } catch (err: any) {
-    throw new Error(err.message || 'Failed to sync with Garmin Connect.');
+    throw new Error(`Garmin Connect returned status ${response.status}. Please try again.`);
   }
+
+  const rawData = await response.json();
+  return processRawGarminActivities(rawData, existingWorkouts);
+}
+
+function processRawGarminActivities(rawData: any, existingWorkouts: Workout[]): GarminSyncResult {
+  let list: any[] = [];
+  if (Array.isArray(rawData)) {
+    list = rawData;
+  } else if (rawData && Array.isArray(rawData.activities)) {
+    list = rawData.activities;
+  } else if (rawData && Array.isArray(rawData.activityList)) {
+    list = rawData.activityList;
+  }
+
+  const parsedWorkouts: Workout[] = [];
+  for (const item of list) {
+    const workout = parseGarminPersonalActivity(item);
+    if (workout) {
+      parsedWorkouts.push(workout);
+    }
+  }
+
+  if (parsedWorkouts.length === 0) {
+    return {
+      newActivities: [],
+      duplicatesCount: 0,
+      message: 'Garmin Connect Personal API checked: No running activities found on your account.',
+    };
+  }
+
+  // Deduplicate against existing workouts
+  const { unique, duplicateCount } = deduplicateWorkouts(parsedWorkouts, existingWorkouts);
+
+  return {
+    newActivities: unique,
+    duplicatesCount: duplicateCount,
+    message: unique.length > 0
+      ? `Successfully pulled ${unique.length} authentic run(s) from your Garmin Connect account!`
+      : `All ${duplicateCount} activities from your Garmin account are already present in your training log.`,
+  };
 }

@@ -61,6 +61,9 @@ export interface GarminCloudAccount {
   lastSyncTime?: string;
   autoSync: boolean;
   pendingActivitiesCount: number;
+  personalApiKey?: string;
+  accessToken?: string;
+  tokenExpiresAt?: number;
 }
 
 export type StepType = 'warmup' | 'interval' | 'recovery' | 'cooldown' | 'steady';

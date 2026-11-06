@@ -99,7 +99,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 Welcome to StridePulse
               </h3>
               <p className="text-xs text-slate-600 dark:text-slate-300 max-w-xl mt-0.5 leading-relaxed">
-                All mock data has been removed. Your training log is ready for your personal running activities. Use the <strong className="text-orange-600 dark:text-orange-400 font-semibold">Sync Garmin</strong> button to link your watch, backfill your history, or drag and drop your activity files.
+                Your training log is ready for your personal running activities. Use the <strong className="text-orange-600 dark:text-orange-400 font-semibold">Sync Garmin</strong> button to link your Garmin Personal API Key, or drag and drop your activity files (.FIT, .TCX, .GPX, .ZIP).
               </p>
             </div>
           </div>

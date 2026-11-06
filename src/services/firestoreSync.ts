@@ -1,6 +1,6 @@
 import { collection, doc, getDocs, setDoc, deleteDoc, writeBatch } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { Workout, UserGoals } from '../types/workout';
+import { Workout, UserGoals, GarminCloudAccount } from '../types/workout';
 
 export async function fetchUserWorkoutsFromCloud(userId: string): Promise<Workout[]> {
   const path = `users/${userId}/workouts`;
@@ -90,6 +90,35 @@ export async function saveGoalsToCloud(userId: string, goals: UserGoals): Promis
   try {
     await setDoc(doc(db, 'users', userId, 'settings', 'goals'), {
       ...goals,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, path);
+  }
+}
+
+export async function fetchUserGarminAccountFromCloud(userId: string): Promise<GarminCloudAccount | null> {
+  const path = `users/${userId}/settings/garmin`;
+  try {
+    const docSnap = await getDocs(collection(db, `users/${userId}/settings`));
+    let foundAccount: GarminCloudAccount | null = null;
+    docSnap.forEach(d => {
+      if (d.id === 'garmin') {
+        foundAccount = d.data() as GarminCloudAccount;
+      }
+    });
+    return foundAccount;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.GET, path);
+    return null;
+  }
+}
+
+export async function saveUserGarminAccountToCloud(userId: string, account: GarminCloudAccount): Promise<void> {
+  const path = `users/${userId}/settings/garmin`;
+  try {
+    await setDoc(doc(db, 'users', userId, 'settings', 'garmin'), {
+      ...account,
       updatedAt: new Date().toISOString(),
     });
   } catch (err) {

@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Workout, UserGoals, PlannedWorkout, GarminCloudAccount } from './types/workout';
-import { defaultUserGoals, defaultPlannedWorkouts } from './utils/mockData';
+import { defaultUserGoals, defaultPlannedWorkouts } from './utils/defaultUserData';
 import { computeWeeklySummary } from './utils/analytics';
 import { Navbar } from './components/Navbar';
 import { DashboardView } from './components/DashboardView';
@@ -26,6 +26,8 @@ import {
   saveGoalsToCloud,
   fetchUserWorkoutsFromCloud,
   fetchUserGoalsFromCloud,
+  fetchUserGarminAccountFromCloud,
+  saveUserGarminAccountToCloud,
 } from './services/firestoreSync';
 import { deduplicateWorkouts } from './utils/deduplication';
 import { Watch, Flame, Trophy, TrendingUp } from 'lucide-react';
@@ -301,6 +303,16 @@ function StridePulseApp() {
         })
         .catch(console.warn);
 
+      // Fetch user Garmin Personal API configuration
+      fetchUserGarminAccountFromCloud(user.uid)
+        .then(remoteGarmin => {
+          if (!isMounted) return;
+          if (remoteGarmin) {
+            setCloudAccount(remoteGarmin);
+          }
+        })
+        .catch(console.warn);
+
       if (user.email) {
         setCloudAccount(prev => (prev.isConnected ? {
           ...prev,
@@ -376,6 +388,13 @@ function StridePulseApp() {
     setGoals(updatedGoals);
     if (user) {
       saveGoalsToCloud(user.uid, updatedGoals).catch(console.warn);
+    }
+  };
+
+  const handleUpdateCloudAccount = (updated: GarminCloudAccount) => {
+    setCloudAccount(updated);
+    if (user) {
+      saveUserGarminAccountToCloud(user.uid, updated).catch(console.warn);
     }
   };
 
@@ -484,7 +503,7 @@ function StridePulseApp() {
         onAddWorkout={handleAddWorkout}
         onBulkAddWorkouts={handleBulkAddWorkouts}
         cloudAccount={cloudAccount}
-        onUpdateCloudAccount={setCloudAccount}
+        onUpdateCloudAccount={handleUpdateCloudAccount}
         distanceUnit={distanceUnit}
         existingWorkouts={workouts}
       />

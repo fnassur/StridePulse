@@ -13,6 +13,7 @@ import {
   X,
   PlusCircle,
   Cloud,
+  KeyRound,
   Layers,
   FolderArchive,
   ChevronRight,
@@ -214,7 +215,7 @@ export const GarminSyncModal: React.FC<GarminSyncModalProps> = ({
                 Garmin Watch &amp; Activity Synchronization
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Direct Cloud Sync, Historical Backfill, and Multi-File / ZIP Archive Ingestion
+                Direct Personal API Sync, Multi-File &amp; ZIP Archive Ingestion
               </p>
             </div>
           </div>
@@ -239,8 +240,8 @@ export const GarminSyncModal: React.FC<GarminSyncModalProps> = ({
                 : 'border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'
             }`}
           >
-            <Cloud className="h-4 w-4" />
-            <span>Garmin Cloud &amp; History</span>
+            <KeyRound className="h-4 w-4" />
+            <span>Garmin Personal API</span>
           </button>
 
           <button

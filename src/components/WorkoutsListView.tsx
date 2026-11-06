@@ -151,7 +151,7 @@ export const WorkoutsListView: React.FC<WorkoutsListViewProps> = ({
                 No Garmin Activities Logged
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto mt-1 leading-relaxed">
-                All mock runs have been removed. Connect your Garmin account or import your activity files (.FIT, .TCX, .GPX, or .ZIP) to populate your log.
+                Connect your Garmin Personal API Key or import your activity files (.FIT, .TCX, .GPX, or .ZIP archive) to populate your authentic running log.
               </p>
             </div>
             <button
