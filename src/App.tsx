@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Workout, UserGoals, PlannedWorkout, GarminCloudAccount } from './types/workout';
-import { generateSeedWorkouts, defaultUserGoals, defaultPlannedWorkouts } from './utils/mockData';
+import { defaultUserGoals, defaultPlannedWorkouts } from './utils/mockData';
 import { computeWeeklySummary } from './utils/analytics';
 import { Navbar } from './components/Navbar';
 import { DashboardView } from './components/DashboardView';
@@ -24,6 +24,8 @@ import {
   saveBatchWorkoutsToCloud,
   deleteWorkoutFromCloud,
   saveGoalsToCloud,
+  fetchUserWorkoutsFromCloud,
+  fetchUserGoalsFromCloud,
 } from './services/firestoreSync';
 import { deduplicateWorkouts } from './utils/deduplication';
 import { Watch, Flame, Trophy, TrendingUp } from 'lucide-react';
@@ -106,45 +108,14 @@ function StridePulseApp() {
     });
   };
 
-  // Workouts state with localStorage persistence and automatic normalization
+  // Workouts state: starts empty; loaded exclusively from Firestore per logged-in user
   const [workouts, setWorkouts] = useState<Workout[]>(() => {
     if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('stridepulse_workouts_v1');
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            const normalized = normalizeStoredWorkouts(parsed);
-            const seeds = generateSeedWorkouts();
-            const existingIds = new Set(normalized.map(w => w.id));
-            const merged = [...normalized];
-            for (const s of seeds) {
-              if (!existingIds.has(s.id)) {
-                merged.push(s);
-              }
-            }
-            return merged;
-          }
-        } catch (e) {
-          console.error('Failed to parse saved workouts', e);
-        }
-      }
+      // Purge legacy mock data cache if it exists
+      localStorage.removeItem('stridepulse_workouts_v1');
     }
-    return generateSeedWorkouts();
+    return [];
   });
-
-  // Ensure any cached or in-flight workouts normalize on mount
-  useEffect(() => {
-    setWorkouts(prev => normalizeStoredWorkouts(prev));
-  }, []);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('stridepulse_workouts_v1', JSON.stringify(workouts));
-    } catch (e) {
-      console.warn('LocalStorage quota or serialization error', e);
-    }
-  }, [workouts]);
 
   // Goals state with localStorage persistence
   const [goals, setGoals] = useState<UserGoals>(() => {
@@ -309,28 +280,92 @@ function StridePulseApp() {
     }
   };
 
-  // Synchronize local workouts and goals to cloud when user logs in
+  // Synchronize user workouts and goals with Firestore when user authentication state changes
   useEffect(() => {
+    let isMounted = true;
     if (user) {
-      syncLocalDataToCloud(user.uid, workouts, goals).then(res => {
-        setWorkouts(res.mergedWorkouts);
-        setGoals(res.mergedGoals);
-      });
+      // Load user-specific cached workouts first if available for immediate rendering
+      try {
+        const cached = localStorage.getItem(`stridepulse_workouts_${user.uid}`);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setWorkouts(normalizeStoredWorkouts(parsed));
+          }
+        }
+      } catch (e) {
+        console.warn(e);
+      }
+
+      // Fetch activities strictly from Firestore under private user path
+      fetchUserWorkoutsFromCloud(user.uid)
+        .then(remoteWorkouts => {
+          if (!isMounted) return;
+          const normalized = normalizeStoredWorkouts(remoteWorkouts);
+          setWorkouts(normalized);
+          try {
+            localStorage.setItem(`stridepulse_workouts_${user.uid}`, JSON.stringify(normalized));
+          } catch (e) {
+            console.warn(e);
+          }
+        })
+        .catch(console.warn);
+
+      // Fetch user goals
+      fetchUserGoalsFromCloud(user.uid)
+        .then(remoteGoals => {
+          if (!isMounted) return;
+          if (remoteGoals) {
+            setGoals(remoteGoals);
+            if (remoteGoals.distanceUnit) {
+              setDistanceUnit(remoteGoals.distanceUnit);
+            }
+          }
+        })
+        .catch(console.warn);
+
+      if (user.email) {
+        setCloudAccount(prev => ({
+          ...prev,
+          email: user.email || prev.email,
+        }));
+      }
+    } else {
+      // User is logged out: data is isolated, clean empty state
+      setWorkouts([]);
+      setSelectedWorkout(null);
     }
+
+    return () => {
+      isMounted = false;
+    };
   }, [user]);
+
+  // Persist workouts to user-scoped localStorage cache
+  useEffect(() => {
+    if (user && workouts.length > 0) {
+      try {
+        localStorage.setItem(`stridepulse_workouts_${user.uid}`, JSON.stringify(workouts));
+      } catch (e) {
+        console.warn('LocalStorage error', e);
+      }
+    }
+  }, [workouts, user]);
 
   // Workout mutation handlers with cloud synchronization
   const handleAddWorkout = (workout: Workout) => {
-    setWorkouts(prev => [workout, ...prev]);
-    setSelectedWorkout(workout); // open newly added workout
+    const normalized = normalizeStoredWorkouts([workout])[0];
+    setWorkouts(prev => [normalized, ...prev]);
+    setSelectedWorkout(normalized); // open newly added workout
     if (user) {
-      saveWorkoutToCloud(user.uid, workout).catch(console.warn);
+      saveWorkoutToCloud(user.uid, normalized).catch(console.warn);
     }
   };
 
   const handleBulkAddWorkouts = (newWorkouts: Workout[]) => {
+    const normalized = normalizeStoredWorkouts(newWorkouts);
     setWorkouts(prev => {
-      const { unique } = deduplicateWorkouts(newWorkouts, prev);
+      const { unique } = deduplicateWorkouts(normalized, prev);
       if (unique.length === 0) return prev;
 
       if (user) {

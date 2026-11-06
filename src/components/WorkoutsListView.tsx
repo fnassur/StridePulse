@@ -141,10 +141,31 @@ export const WorkoutsListView: React.FC<WorkoutsListViewProps> = ({
 
       {/* Workouts Table / List */}
       <div className="rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 overflow-hidden shadow-xs">
-        {filteredWorkouts.length === 0 ? (
+        {workouts.length === 0 ? (
+          <div className="py-16 text-center space-y-3 px-4">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-orange-100 text-orange-600 dark:bg-orange-950/60 dark:text-orange-400">
+              <Watch className="h-6 w-6" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                No Garmin Activities Logged
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto mt-1 leading-relaxed">
+                All mock runs have been removed. Connect your Garmin account or import your activity files (.FIT, .TCX, .GPX, or .ZIP) to populate your log.
+              </p>
+            </div>
+            <button
+              onClick={onOpenSyncModal}
+              className="inline-flex items-center gap-2 rounded-xl bg-orange-600 px-4 py-2 text-xs font-bold text-white hover:bg-orange-500 shadow-xs transition-colors"
+            >
+              <Plus className="h-4 w-4" />
+              <span>Sync Garmin Activities</span>
+            </button>
+          </div>
+        ) : filteredWorkouts.length === 0 ? (
           <div className="py-12 text-center">
             <Watch className="h-8 w-8 text-slate-400 mx-auto mb-2" />
-            <p className="text-xs font-medium text-slate-500">No matching activities found.</p>
+            <p className="text-xs font-medium text-slate-500">No matching activities found for your search filter.</p>
           </div>
         ) : (
           <div className="divide-y divide-slate-100 dark:divide-slate-800/80">

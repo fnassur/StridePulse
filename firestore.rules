@@ -56,6 +56,15 @@ service cloud.firestore {
           && isValidId(settingId);
         allow delete: if isOwner(userId);
       }
+
+      // Planned Workouts Subcollection
+      match /plannedWorkouts/{planId} {
+        allow get, list: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+          && isValidId(planId);
+        allow delete: if isOwner(userId)
+          && isValidId(planId);
+      }
     }
   }
 }

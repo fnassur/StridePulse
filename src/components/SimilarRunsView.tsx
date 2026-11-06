@@ -30,8 +30,18 @@ export const SimilarRunsView: React.FC<SimilarRunsViewProps> = ({
 
   if (!currentWorkout) {
     return (
-      <div className="py-12 text-center text-xs text-slate-500">
-        No workouts logged yet. Sync a Garmin activity to start comparing progress.
+      <div className="rounded-2xl border border-slate-200 bg-white p-16 text-center dark:border-slate-800 dark:bg-slate-900 shadow-xs space-y-3">
+        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-orange-100 text-orange-600 dark:bg-orange-950/60 dark:text-orange-400">
+          <TrendingUp className="h-6 w-6" />
+        </div>
+        <div>
+          <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+            Progress Comparison Waiting for Data
+          </h3>
+          <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto mt-1 leading-relaxed">
+            Once you sync your Garmin activities, StridePulse automatically compares pace-to-heart-rate efficiency curves, elevation profiles, and recurring routes.
+          </p>
+        </div>
       </div>
     );
   }

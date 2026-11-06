@@ -3,7 +3,6 @@ import JSZip from 'jszip';
 import { Workout, WorkoutType, GarminCloudAccount } from '../types/workout';
 import { parseGPX, parseTCX, parseFIT, formatPace, formatDuration } from '../utils/parsers';
 import { deduplicateWorkouts } from '../utils/deduplication';
-import { generateSeedWorkouts } from '../utils/mockData';
 import { GarminCloudSyncHub } from './GarminCloudSyncHub';
 import {
   Watch,
@@ -13,7 +12,6 @@ import {
   AlertCircle,
   X,
   PlusCircle,
-  Sparkles,
   Cloud,
   Layers,
   FolderArchive,
@@ -42,7 +40,7 @@ export const GarminSyncModal: React.FC<GarminSyncModalProps> = ({
   distanceUnit,
   existingWorkouts,
 }) => {
-  const [activeTab, setActiveTab] = useState<'cloud' | 'upload' | 'samples' | 'manual'>('cloud');
+  const [activeTab, setActiveTab] = useState<'cloud' | 'upload' | 'manual'>('cloud');
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingStatus, setProcessingStatus] = useState('');
@@ -169,13 +167,6 @@ export const GarminSyncModal: React.FC<GarminSyncModalProps> = ({
     }
   };
 
-  const handleLoadSamples = () => {
-    const samples = generateSeedWorkouts();
-    const { unique } = deduplicateWorkouts(samples, existingWorkouts);
-    onBulkAddWorkouts(unique.length > 0 ? unique : samples);
-    onClose();
-  };
-
   const handleSaveManual = (e: React.FormEvent) => {
     e.preventDefault();
     const distNum = parseFloat(manualDistance) || 5;
@@ -262,20 +253,6 @@ export const GarminSyncModal: React.FC<GarminSyncModalProps> = ({
           >
             <FolderArchive className="h-4 w-4" />
             <span>Batch Files &amp; ZIP Archive</span>
-          </button>
-
-          <button
-            onClick={() => {
-              setActiveTab('samples');
-              setBatchResults(null);
-            }}
-            className={`rounded-t-lg py-2.5 px-3.5 text-xs font-semibold whitespace-nowrap border-b-2 transition-all ${
-              activeTab === 'samples'
-                ? 'border-orange-500 text-orange-600 dark:text-orange-400 bg-white dark:bg-slate-900 shadow-xs'
-                : 'border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'
-            }`}
-          >
-            Sample Workouts
           </button>
 
           <button
@@ -437,29 +414,6 @@ export const GarminSyncModal: React.FC<GarminSyncModalProps> = ({
                   </div>
                 </div>
               )}
-            </div>
-          )}
-
-          {activeTab === 'samples' && (
-            <div className="space-y-4 text-center py-6">
-              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-orange-100 text-orange-600 dark:bg-orange-950/60 dark:text-orange-400 mb-2">
-                <Sparkles className="h-6 w-6" />
-              </div>
-              <div>
-                <h4 className="text-sm font-bold text-slate-900 dark:text-white">
-                  Load Full Sample Running History
-                </h4>
-                <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto mt-1">
-                  Populate your dashboard with realistic multi-year Garmin runs, including tempo runs, marathon splits, 1000m VO2 repeats, and elevation profiles.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={handleLoadSamples}
-                className="rounded-xl bg-orange-600 px-5 py-2.5 text-xs font-bold text-white shadow-xs hover:bg-orange-500"
-              >
-                Load Sample Workouts
-              </button>
             </div>
           )}
 

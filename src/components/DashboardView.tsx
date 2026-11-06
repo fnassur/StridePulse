@@ -87,6 +87,32 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   return (
     <div className="space-y-6 pb-12">
+      {/* Zero-data Welcome Callout */}
+      {workouts.length === 0 && (
+        <div className="rounded-2xl border border-orange-200 bg-gradient-to-r from-orange-500/10 via-amber-500/5 to-transparent p-6 dark:border-orange-950/60 dark:from-orange-950/30 dark:to-slate-900 transition-colors flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 shadow-xs">
+          <div className="flex items-center gap-4">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-orange-600 text-white shadow-xs shrink-0">
+              <Watch className="h-6 w-6" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                Welcome to StridePulse
+              </h3>
+              <p className="text-xs text-slate-600 dark:text-slate-300 max-w-xl mt-0.5 leading-relaxed">
+                All mock data has been removed. Your training log is ready for your personal running activities. Use the <strong className="text-orange-600 dark:text-orange-400 font-semibold">Sync Garmin</strong> button to link your watch, backfill your history, or drag and drop your activity files.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onOpenSyncModal}
+            className="flex items-center justify-center gap-2 rounded-xl bg-orange-600 px-4 py-2.5 text-xs font-bold text-white shadow-xs hover:bg-orange-500 transition-colors shrink-0"
+          >
+            <Watch className="h-4 w-4" />
+            <span>Sync Garmin Activities</span>
+          </button>
+        </div>
+      )}
+
       {/* Top Banner / Goal Progress Hero Strip */}
       <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-xs dark:border-slate-800 dark:bg-slate-900 transition-colors">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
@@ -543,64 +569,87 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </button>
         </div>
 
-        <div className="divide-y divide-slate-100 dark:divide-slate-800/80 mt-2">
-          {workouts.slice(0, 5).map(w => {
-            const dateStr = new Date(w.date).toLocaleDateString('en-US', {
-              weekday: 'short',
-              month: 'short',
-              day: 'numeric',
-            });
+        {workouts.length === 0 ? (
+          <div className="py-10 px-4 text-center space-y-3">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-orange-100 text-orange-600 dark:bg-orange-950/60 dark:text-orange-400">
+              <Watch className="h-6 w-6" />
+            </div>
+            <div>
+              <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                No Activities Synced Yet
+              </h4>
+              <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto mt-1 leading-relaxed">
+                Workouts flow directly from your Garmin watch or file upload and are saved to your private Firestore database.
+              </p>
+            </div>
+            <button
+              onClick={onOpenSyncModal}
+              className="inline-flex items-center gap-2 rounded-xl bg-orange-600 px-4 py-2 text-xs font-bold text-white hover:bg-orange-500 shadow-xs transition-colors"
+            >
+              <Watch className="h-4 w-4" />
+              <span>Sync Garmin Activities</span>
+            </button>
+          </div>
+        ) : (
+          <div className="divide-y divide-slate-100 dark:divide-slate-800/80 mt-2">
+            {workouts.slice(0, 5).map(w => {
+              const dateStr = new Date(w.date).toLocaleDateString('en-US', {
+                weekday: 'short',
+                month: 'short',
+                day: 'numeric',
+              });
 
-            return (
-              <div
-                key={w.id}
-                onClick={() => onSelectWorkout(w)}
-                className="group flex flex-col sm:flex-row sm:items-center sm:justify-between py-3.5 px-2 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer transition-colors gap-3"
-              >
-                <div className="flex items-start gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-50 text-orange-600 dark:bg-orange-950/40 dark:text-orange-400 shrink-0">
-                    <Watch className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <h4 className="text-sm font-bold text-slate-900 dark:text-white group-hover:text-orange-600 dark:group-hover:text-orange-400 transition-colors">
-                      {w.title}
-                    </h4>
-                    {/* Clean unboxed metadata line */}
-                    <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                      <span className="capitalize">{w.type}</span>
-                      <span aria-hidden="true">·</span>
-                      <span>{dateStr}</span>
-                      <span aria-hidden="true">·</span>
-                      <span>{w.source === 'garmin_fit' ? 'Garmin FIT' : w.source === 'garmin_gpx' ? 'Garmin GPX' : w.source === 'garmin_tcx' ? 'Garmin TCX' : 'Manual'}</span>
+              return (
+                <div
+                  key={w.id}
+                  onClick={() => onSelectWorkout(w)}
+                  className="group flex flex-col sm:flex-row sm:items-center sm:justify-between py-3.5 px-2 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer transition-colors gap-3"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-50 text-orange-600 dark:bg-orange-950/40 dark:text-orange-400 shrink-0">
+                      <Watch className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-slate-900 dark:text-white group-hover:text-orange-600 dark:group-hover:text-orange-400 transition-colors">
+                        {w.title}
+                      </h4>
+                      {/* Clean unboxed metadata line */}
+                      <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                        <span className="capitalize">{w.type}</span>
+                        <span aria-hidden="true">·</span>
+                        <span>{dateStr}</span>
+                        <span aria-hidden="true">·</span>
+                        <span>{w.source === 'garmin_fit' ? 'Garmin FIT' : w.source === 'garmin_gpx' ? 'Garmin GPX' : w.source === 'garmin_tcx' ? 'Garmin TCX' : 'Manual'}</span>
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                <div className="flex items-center gap-6 justify-between sm:justify-end">
-                  <div className="text-right">
-                    <span className="font-mono text-base font-bold text-slate-900 dark:text-white tabular-nums block">
-                      {(w.distanceKm * unitMultiplier).toFixed(2)} {unitLabel}
-                    </span>
-                    <span className="text-[11px] text-slate-400 font-mono tabular-nums">
-                      {formatDuration(w.durationSec)}
-                    </span>
+                  <div className="flex items-center gap-6 justify-between sm:justify-end">
+                    <div className="text-right">
+                      <span className="font-mono text-base font-bold text-slate-900 dark:text-white tabular-nums block">
+                        {(w.distanceKm * unitMultiplier).toFixed(2)} {unitLabel}
+                      </span>
+                      <span className="text-[11px] text-slate-400 font-mono tabular-nums">
+                        {formatDuration(w.durationSec)}
+                      </span>
+                    </div>
+
+                    <div className="text-right">
+                      <span className="font-mono text-xs font-semibold text-cyan-600 dark:text-cyan-400 tabular-nums block">
+                        {formatPace(w.avgPaceSecKm, distanceUnit)}
+                      </span>
+                      <span className="text-[11px] text-rose-600 dark:text-rose-400 font-mono tabular-nums">
+                        {w.avgHeartRate ? `${w.avgHeartRate} bpm` : '--'}
+                      </span>
+                    </div>
+
+                    <ChevronRight className="h-4 w-4 text-slate-400 group-hover:text-orange-500 group-hover:translate-x-0.5 transition-all" />
                   </div>
-
-                  <div className="text-right">
-                    <span className="font-mono text-xs font-semibold text-cyan-600 dark:text-cyan-400 tabular-nums block">
-                      {formatPace(w.avgPaceSecKm, distanceUnit)}
-                    </span>
-                    <span className="text-[11px] text-rose-600 dark:text-rose-400 font-mono tabular-nums">
-                      {w.avgHeartRate ? `${w.avgHeartRate} bpm` : '--'}
-                    </span>
-                  </div>
-
-                  <ChevronRight className="h-4 w-4 text-slate-400 group-hover:text-orange-500 group-hover:translate-x-0.5 transition-all" />
                 </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );
