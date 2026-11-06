@@ -641,18 +641,13 @@ export function parseTCX(xmlText: string, fileName: string): Workout {
   // Smooth pace
   smoothTrackPointPace(trackPoints);
 
-  // Check if this is the user's Garmin run (activity_24974775245 or matching 7.06/7.07 mi with 57:48 elapsed)
-  const isFaizGarminRun =
-    fileName.toLowerCase().includes('24974775245') ||
-    (Math.abs(totalDistKm - 11.36) < 0.25 && Math.abs(lapTimerSeconds - 3468) < 30);
-
   // Moving and elapsed duration / pace calculation (incorporates Lap TotalTimeSeconds)
   const timeStats = computeMovingAndElapsedStats(
     trackPoints,
     totalDistKm,
-    isFaizGarminRun ? 3228 : undefined, // 53:48 Moving Time
-    isFaizGarminRun ? 3468 : undefined, // 57:48 Elapsed Time
-    isFaizGarminRun ? 3231 : (lapTimerSeconds > 0 ? lapTimerSeconds : undefined) // 53:51 Time (Timer)
+    undefined,
+    undefined,
+    lapTimerSeconds > 0 ? lapTimerSeconds : undefined
   );
 
   const hrPoints = trackPoints.map(p => p.heartRate).filter((h): h is number => typeof h === 'number' && h > 0);
@@ -683,8 +678,8 @@ export function parseTCX(xmlText: string, fileName: string): Workout {
     maxHeartRate,
     avgCadence,
     calories: Math.round(totalDistKm * 68),
-    avgPower: isFaizGarminRun ? 308 : undefined,
-    maxPower: isFaizGarminRun ? 377 : undefined,
+    avgPower: undefined,
+    maxPower: undefined,
     perceivedEffort: 6,
     notes: 'Imported from Garmin TCX file (' + fileName + ')',
     source: 'garmin_tcx',

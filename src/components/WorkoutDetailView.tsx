@@ -56,56 +56,22 @@ export const WorkoutDetailView: React.FC<WorkoutDetailViewProps> = ({
   const unitMultiplier = distanceUnit === 'mi' ? 0.621371 : 1.0;
   const unitLabel = distanceUnit;
 
-  // Auto-detect target Garmin run (e.g. activity 24974775245 or matching 7.06/7.07 mi with 57:48 elapsed)
-  const isTargetGarminRun =
-    workout.id === 'garmin_run_faiz' ||
-    workout.id === 'activity_24974775245' ||
-    workout.title?.toLowerCase().includes('24974775245') ||
-    workout.sourceFileName?.toLowerCase().includes('24974775245') ||
-    (Math.abs(workout.distanceKm - 11.36) < 0.25 && (workout.elapsedDurationSec === 3468 || workout.durationSec === 3468 || workout.movingDurationSec === 3468));
+  // Exact Garmin Timing & Moving Pace calculations
+  const effectiveMovingSec = workout.movingDurationSec || workout.durationSec;
+  const effectiveElapsedSec = workout.elapsedDurationSec || effectiveMovingSec;
+  const effectiveTimerSec = workout.timerDurationSec || (workout.movingDurationSec ? workout.movingDurationSec + 3 : effectiveMovingSec);
+  const effectiveStoppedSec = workout.stoppedDurationSec !== undefined ? workout.stoppedDurationSec : Math.max(0, effectiveElapsedSec - effectiveMovingSec);
+  const effectivePower = workout.avgPower;
+  const effectiveMaxPower = workout.maxPower;
 
-  // Exact Garmin Timing & Moving Pace calculations:
-  // Moving Time: 53:48 (3228s)
-  // Time (Timer): 53:51 (3231s)
-  // Elapsed Time: 57:48 (3468s)
-  // Stopped: 4:00 (240s)
-  // Pace: 7:37 /mi (284 s/km)
-  // Power: 308 W (Max 377 W)
-  const effectiveMovingSec = isTargetGarminRun ? 3228 : (workout.movingDurationSec || workout.durationSec);
-  const effectiveElapsedSec = isTargetGarminRun ? 3468 : (workout.elapsedDurationSec || effectiveMovingSec);
-  const effectiveTimerSec = isTargetGarminRun ? 3231 : (workout.timerDurationSec || (workout.movingDurationSec ? workout.movingDurationSec + 3 : effectiveMovingSec));
-  const effectiveStoppedSec = isTargetGarminRun ? 240 : (workout.stoppedDurationSec || Math.max(0, effectiveElapsedSec - effectiveMovingSec));
-  const effectivePower = workout.avgPower || (isTargetGarminRun ? 308 : undefined);
-  const effectiveMaxPower = workout.maxPower || (isTargetGarminRun ? 377 : undefined);
-
-  // PRIMARY PACE IS STRICTLY CALCULATED FROM MOVING TIME!
+  // PRIMARY PACE IS STRICTLY CALCULATED FROM MOVING TIME
   const effectiveMovingPaceSecKm = workout.distanceKm > 0.05
     ? Math.round(effectiveMovingSec / workout.distanceKm)
-    : (isTargetGarminRun ? 284 : workout.avgPaceSecKm);
+    : workout.avgPaceSecKm;
 
   const effectiveElapsedPaceSecKm = workout.distanceKm > 0.05
     ? Math.round(effectiveElapsedSec / workout.distanceKm)
     : effectiveMovingPaceSecKm;
-
-  // Auto-sync target run metrics to parent state if not already set
-  useEffect(() => {
-    if (isTargetGarminRun && (workout.movingDurationSec !== 3228 || workout.avgPaceSecKm !== 284 || !workout.avgPower)) {
-      onUpdateWorkout({
-        ...workout,
-        title: workout.title || 'activity 24974775245',
-        distanceKm: 11.362,
-        durationSec: 3228,
-        movingDurationSec: 3228,
-        timerDurationSec: 3231,
-        elapsedDurationSec: 3468,
-        stoppedDurationSec: 240,
-        avgPaceSecKm: 284,
-        elapsedPaceSecKm: 305,
-        avgPower: 308,
-        maxPower: 377,
-      });
-    }
-  }, [workout, isTargetGarminRun, onUpdateWorkout]);
 
   // Timing Adjustment Modal State
   const [isTimingModalOpen, setIsTimingModalOpen] = useState(false);

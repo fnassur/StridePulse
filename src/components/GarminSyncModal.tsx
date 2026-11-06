@@ -281,6 +281,7 @@ export const GarminSyncModal: React.FC<GarminSyncModalProps> = ({
               }}
               distanceUnit={distanceUnit}
               existingWorkouts={existingWorkouts}
+              onSwitchToZipTab={() => setActiveTab('upload')}
             />
           )}
 

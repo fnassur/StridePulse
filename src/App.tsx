@@ -58,35 +58,6 @@ function StridePulseApp() {
   // Normalization helper ensuring all workouts adhere to Garmin moving time & pace standards
   const normalizeStoredWorkouts = (savedList: Workout[]): Workout[] => {
     return savedList.map(w => {
-      const isFaizGarminRun =
-        w.id === 'garmin_run_faiz' ||
-        w.id === 'activity_24974775245' ||
-        w.title?.toLowerCase().includes('24974775245') ||
-        w.sourceFileName?.toLowerCase().includes('24974775245') ||
-        (Math.abs(w.distanceKm - 11.36) < 0.25 && (w.elapsedDurationSec === 3468 || w.durationSec === 3468 || w.movingDurationSec === 3468));
-
-      if (isFaizGarminRun) {
-        return {
-          ...w,
-          title: w.title || 'activity 24974775245',
-          distanceKm: 11.362, // 7.06 mi
-          durationSec: 3228, // 53:48 moving time
-          movingDurationSec: 3228,
-          timerDurationSec: 3231, // 53:51 Time (Timer)
-          elapsedDurationSec: 3468, // 57:48 Elapsed Time
-          stoppedDurationSec: 240, // 4:00 stopped / paused interval
-          avgPaceSecKm: 284, // 7:37 /mi moving pace (4:44 /km)
-          elapsedPaceSecKm: 305, // 8:11 /mi elapsed pace (5:05 /km)
-          avgPower: 308,
-          maxPower: 377,
-          avgHeartRate: w.avgHeartRate || 144,
-          maxHeartRate: w.maxHeartRate || 160,
-          avgCadence: w.avgCadence || 174,
-          elevationGainM: w.elevationGainM || 59,
-          calories: w.calories || 773,
-        };
-      }
-
       const dist = w.distanceKm || 0;
       const moving = w.movingDurationSec || w.durationSec;
       const elapsed = w.elapsedDurationSec || moving;
@@ -180,24 +151,30 @@ function StridePulseApp() {
     }
   }, [plannedWorkouts]);
 
-  // Garmin Cloud Account Auto-Sync state
+  // Garmin Cloud Account Synchronization state
   const [cloudAccount, setCloudAccount] = useState<GarminCloudAccount>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('stridepulse_garmin_cloud_v1');
       if (saved) {
         try {
-          return JSON.parse(saved);
+          const parsed = JSON.parse(saved);
+          // Purge legacy mock account if present
+          if (parsed.email === 'faiz.ali.nassur.93@gmail.com' && parsed.lastSyncTime?.includes('07:15')) {
+            localStorage.removeItem('stridepulse_garmin_cloud_v1');
+          } else {
+            return parsed;
+          }
         } catch (e) {
           console.error(e);
         }
       }
     }
     return {
-      isConnected: true,
-      email: 'faiz.ali.nassur.93@gmail.com',
-      deviceName: 'Garmin Forerunner 965',
-      lastSyncTime: 'Today at 07:15',
-      autoSync: true,
+      isConnected: false,
+      email: '',
+      deviceName: '',
+      lastSyncTime: '',
+      autoSync: false,
       pendingActivitiesCount: 0,
     };
   });
@@ -325,10 +302,10 @@ function StridePulseApp() {
         .catch(console.warn);
 
       if (user.email) {
-        setCloudAccount(prev => ({
+        setCloudAccount(prev => (prev.isConnected ? {
           ...prev,
-          email: user.email || prev.email,
-        }));
+          email: prev.email || user.email || '',
+        } : prev));
       }
     } else {
       // User is logged out: data is isolated, clean empty state
