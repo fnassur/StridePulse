@@ -196,24 +196,37 @@ export function parseGarminPersonalActivity(raw: any): Workout | null {
   const elevationGainM = Math.round(raw.elevationGain || raw.totalElevationGain || 0);
   const calories = Math.round(raw.calories || distanceKm * 65);
 
-  // Parse splits / laps if present
+  // Parse sequential distance laps if authentic laps are present (strictly excluding Garmin splitSummaries)
   const splits: LapSplit[] = [];
-  const rawLaps = raw.laps || raw.splitSummaries || raw.lapDTOs;
-  if (Array.isArray(rawLaps)) {
+  const rawLaps = (Array.isArray(raw.laps) && raw.laps.length > 0)
+    ? raw.laps
+    : (Array.isArray(raw.lapDTOs) && raw.lapDTOs.length > 0)
+    ? raw.lapDTOs
+    : (Array.isArray(raw.activityLaps) && raw.activityLaps.length > 0)
+    ? raw.activityLaps
+    : [];
+
+  if (Array.isArray(rawLaps) && rawLaps.length > 0) {
     rawLaps.forEach((lap: any, idx: number) => {
-      const lapDist = (lap.distance || 0) > 100 ? (lap.distance || 0) / 1000 : (lap.distance || 0);
+      const rawDistM = lap.distance || 0;
+      const lapDistKm = rawDistM > 100 ? rawDistM / 1000 : rawDistM;
       const lapMoving = Math.round(lap.movingDuration || lap.duration || 0);
-      splits.push({
-        splitNumber: idx + 1,
-        distanceKm: Number(lapDist.toFixed(2)),
-        durationSec: lapMoving,
-        movingDurationSec: lapMoving,
-        elapsedDurationSec: Math.round(lap.elapsedDuration || lapMoving),
-        paceSecKm: lapDist > 0.05 ? Math.round(lapMoving / lapDist) : avgPaceSecKm,
-        elevationDeltaM: Math.round(lap.elevationGain || 0),
-        avgHeartRate: lap.averageHR ? Math.round(lap.averageHR) : undefined,
-        avgCadence: lap.averageRunningCadenceInStepsPerMinute ? Math.round(lap.averageRunningCadenceInStepsPerMinute) : undefined,
-      });
+      const paceSecKm = lapDistKm > 0.05 ? Math.round(lapMoving / lapDistKm) : avgPaceSecKm;
+
+      // Only accept realistic running splits (between 120s/km [2:00/km] and 1200s/km [20:00/km])
+      if (paceSecKm >= 120 && paceSecKm <= 1200 && lapDistKm >= 0.05 && lapMoving >= 10) {
+        splits.push({
+          splitNumber: idx + 1,
+          distanceKm: Number(lapDistKm.toFixed(2)),
+          durationSec: lapMoving,
+          movingDurationSec: lapMoving,
+          elapsedDurationSec: Math.round(lap.elapsedDuration || lapMoving),
+          paceSecKm,
+          elevationDeltaM: Math.round(lap.elevationGain || 0),
+          avgHeartRate: lap.averageHR ? Math.round(lap.averageHR) : undefined,
+          avgCadence: lap.averageRunningCadenceInStepsPerMinute ? Math.round(lap.averageRunningCadenceInStepsPerMinute) : undefined,
+        });
+      }
     });
   }
 

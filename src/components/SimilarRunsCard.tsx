@@ -185,11 +185,14 @@ export const SimilarRunsCard: React.FC<SimilarRunsCardProps> = ({
       const curr = currentSplits[i];
       const prev = prevSplits[i];
 
-      const hasToday = curr !== undefined && curr.paceSecKm > 0;
-      const hasPrev = prev !== undefined && prev.paceSecKm > 0;
+      const isCurrValid = curr !== undefined && curr.paceSecKm >= 120 && curr.paceSecKm <= 1200;
+      const isPrevValid = prev !== undefined && prev.paceSecKm >= 120 && prev.paceSecKm <= 1200;
 
-      const currPaceSecKm = hasToday ? curr.paceSecKm : 0;
-      const prevPaceSecKm = hasPrev ? prev.paceSecKm : 0;
+      const hasToday = curr !== undefined;
+      const hasPrev = prev !== undefined;
+
+      const currPaceSecKm = isCurrValid ? curr.paceSecKm : (currentWorkout.avgPaceSecKm || 300);
+      const prevPaceSecKm = isPrevValid ? prev.paceSecKm : (prevWorkout.avgPaceSecKm || 300);
 
       const currPaceSecUnit = hasToday ? Math.round(currPaceSecKm * unitFactor) : 0;
       const prevPaceSecUnit = hasPrev ? Math.round(prevPaceSecKm * unitFactor) : 0;
@@ -247,7 +250,7 @@ export const SimilarRunsCard: React.FC<SimilarRunsCardProps> = ({
     if (metricMode === 'pace') {
       const activePaces = comparePoints
         .flatMap(p => [p.hasToday ? p.todayPaceSecUnit : null, p.hasPrev ? p.prevPaceSecUnit : null])
-        .filter((p): p is number => p !== null && p > 0);
+        .filter((p): p is number => p !== null && p >= 150);
 
       if (activePaces.length === 0) return { yMin: 360, yMax: 540, ySpan: 180, yTicks: [] };
 
@@ -359,7 +362,7 @@ export const SimilarRunsCard: React.FC<SimilarRunsCardProps> = ({
   };
 
   const fastestTodaySplit = useMemo(() => {
-    const pts = comparePoints.filter(p => p.hasToday);
+    const pts = comparePoints.filter(p => p.hasToday && p.todayPaceSecUnit >= 150);
     if (pts.length === 0) return null;
     return [...pts].sort((a, b) => a.todayPaceSecUnit - b.todayPaceSecUnit)[0];
   }, [comparePoints]);

@@ -68,6 +68,12 @@ function StridePulseApp() {
       const movingPace = dist > 0.05 ? Math.round(moving / dist) : (w.avgPaceSecKm || 330);
       const elapsedPace = dist > 0.05 ? Math.round(elapsed / dist) : movingPace;
 
+      // Sanitize corrupted splits (e.g. from Garmin splitSummaries with paceSecKm < 120 or durationSec < 10)
+      let cleanedSplits = w.splits || [];
+      if (cleanedSplits.some(s => !s || s.paceSecKm < 120 || s.paceSecKm > 1200 || (s.distanceKm > 0.5 && s.durationSec < 30))) {
+        cleanedSplits = [];
+      }
+
       return {
         ...w,
         durationSec: moving,
@@ -77,6 +83,7 @@ function StridePulseApp() {
         stoppedDurationSec: stopped,
         avgPaceSecKm: movingPace,
         elapsedPaceSecKm: elapsedPace,
+        splits: cleanedSplits,
       };
     });
   };

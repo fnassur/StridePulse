@@ -297,16 +297,25 @@ export function getUniformSplits(workout: Workout, unit: 'km' | 'mi'): LapSplit[
   const fallbackSplits: LapSplit[] = [];
   const targetStepKmFallback = unit === 'mi' ? 1.609344 : 1.0;
 
+  // Detect and filter out corrupted Garmin splitSummaries (e.g. paceSecKm < 120 or durationSec < 10 for long distances)
+  const isCorruptedSplits = Array.isArray(workout.splits) && workout.splits.some(
+    s => !s || s.paceSecKm < 120 || s.paceSecKm > 1200 || (s.distanceKm > 0.5 && s.durationSec < 30)
+  );
+
+  const cleanSourceSplits = !isCorruptedSplits && Array.isArray(workout.splits) && workout.splits.length > 0
+    ? workout.splits.filter(s => s && s.paceSecKm >= 120 && s.paceSecKm <= 1200)
+    : [];
+
   for (let s = 1; s <= fullSplitsCount; s++) {
     let pace = workout.avgPaceSecKm;
     let avgHr = workout.avgHeartRate;
     let avgCad = workout.avgCadence;
 
-    if (workout.splits && workout.splits.length > 0) {
+    if (cleanSourceSplits.length > 0) {
       const ratio = (s - 0.5) / (fullSplitsCount + (remUnitDist >= 0.05 ? remUnitDist : 0));
-      const idx = Math.min(workout.splits.length - 1, Math.max(0, Math.floor(ratio * workout.splits.length)));
-      const srcSplit = workout.splits[idx];
-      if (srcSplit) {
+      const idx = Math.min(cleanSourceSplits.length - 1, Math.max(0, Math.floor(ratio * cleanSourceSplits.length)));
+      const srcSplit = cleanSourceSplits[idx];
+      if (srcSplit && srcSplit.paceSecKm >= 120 && srcSplit.paceSecKm <= 1200) {
         pace = srcSplit.paceSecKm;
         avgHr = srcSplit.avgHeartRate ?? avgHr;
         avgCad = srcSplit.avgCadence ?? avgCad;
@@ -328,8 +337,8 @@ export function getUniformSplits(workout: Workout, unit: 'km' | 'mi'): LapSplit[
 
   if (remUnitDist >= 0.05 || fullSplitsCount === 0) {
     const remKm = remUnitDist * (unit === 'mi' ? 1.609344 : 1.0);
-    const pace = workout.splits && workout.splits.length > 0
-      ? workout.splits[workout.splits.length - 1].paceSecKm
+    const pace = cleanSourceSplits.length > 0
+      ? cleanSourceSplits[cleanSourceSplits.length - 1].paceSecKm
       : workout.avgPaceSecKm;
     const dur = Math.round(pace * remKm);
     fallbackSplits.push({

@@ -40,3 +40,7 @@ Enable StridePulse to pull authentic training and running activity data directly
    - Decoupled `saveBatchWorkoutsToCloud` from the React `setWorkouts` state updater callback to guarantee asynchronous batch execution.
    - Added automatic migration of in-memory local workouts to Firestore upon sign-in.
    - Embedded real-time Firestore persistence status badge in `GarminCloudSyncHub.tsx` showing active sync profile (`faiz.ali.nassur.93@gmail.com`).
+8. **Garmin SplitSummaries Pace Spike Resolution**:
+   - Diagnosed root cause of the vertical spike to `0'01"` pace and the `"Fastest Split: Mi 4 (0'01" /mi)"` anomaly shown in the Progress Comparison chart.
+   - Fixed parser in `garminConnectService.ts` to strictly exclude Garmin's `splitSummaries` (which contain overall Run/Walk/Stand category durations like 6.38 meters in 7s) from being misinterpreted as sequential distance laps.
+   - Added pace sanity boundaries (`120s/km` to `1200s/km`) in `getUniformSplits`, `normalizeStoredWorkouts`, and `SimilarRunsCard.tsx` so existing Firestore records automatically render authentic, clean mile-by-mile pace lines.
