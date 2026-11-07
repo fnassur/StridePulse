@@ -278,12 +278,22 @@ function StridePulseApp() {
 
       // Fetch activities strictly from Firestore under private user path
       fetchUserWorkoutsFromCloud(user.uid)
-        .then(remoteWorkouts => {
+        .then(async remoteWorkouts => {
           if (!isMounted) return;
-          const normalized = normalizeStoredWorkouts(remoteWorkouts);
-          setWorkouts(normalized);
+          const normalizedRemote = normalizeStoredWorkouts(remoteWorkouts);
+          
+          // Check if there are local workouts in memory that need to be pushed to Firestore
+          const remoteMap = new Set(normalizedRemote.map(w => w.id));
+          const localOnly = workouts.filter(w => !remoteMap.has(w.id));
+          if (localOnly.length > 0) {
+            console.log(`[App] Uploading ${localOnly.length} local workouts to Cloud Firestore for ${user.uid}...`);
+            await saveBatchWorkoutsToCloud(user.uid, localOnly);
+          }
+
+          const combined = normalizeStoredWorkouts([...localOnly, ...normalizedRemote]);
+          setWorkouts(combined);
           try {
-            localStorage.setItem(`stridepulse_workouts_${user.uid}`, JSON.stringify(normalized));
+            localStorage.setItem(`stridepulse_workouts_${user.uid}`, JSON.stringify(combined));
           } catch (e) {
             console.warn(e);
           }
@@ -351,17 +361,29 @@ function StridePulseApp() {
     }
   };
 
-  const handleBulkAddWorkouts = (newWorkouts: Workout[]) => {
+  const handleBulkAddWorkouts = async (newWorkouts: Workout[]) => {
     const normalized = normalizeStoredWorkouts(newWorkouts);
-    setWorkouts(prev => {
-      const { unique } = deduplicateWorkouts(normalized, prev);
-      if (unique.length === 0) return prev;
+    const { unique } = deduplicateWorkouts(normalized, workouts);
+    if (unique.length === 0) return;
 
-      if (user) {
-        saveBatchWorkoutsToCloud(user.uid, unique).catch(console.warn);
-      }
-      return [...unique, ...prev];
+    // 1. Immediately update UI state with new unique runs
+    setWorkouts(prev => {
+      const { unique: freshUnique } = deduplicateWorkouts(normalized, prev);
+      return [...freshUnique, ...prev];
     });
+
+    // 2. Persist to Cloud Firestore if user is authenticated
+    if (user) {
+      try {
+        console.log(`[App] Pushing ${unique.length} new workouts to Cloud Firestore for user ${user.uid}...`);
+        await saveBatchWorkoutsToCloud(user.uid, unique);
+        console.log(`[App] Successfully pushed ${unique.length} workouts to Cloud Firestore!`);
+      } catch (err) {
+        console.error('[App] Failed to push workouts to Cloud Firestore:', err);
+      }
+    } else {
+      console.warn('[App] User is not logged in. Workouts stored locally in browser session.');
+    }
   };
 
   const handleUpdateWorkout = (updated: Workout) => {

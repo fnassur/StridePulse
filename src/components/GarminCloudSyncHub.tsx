@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { GarminCloudAccount, Workout } from '../types/workout';
+import { useAuth } from '../context/AuthContext';
 import {
   validateGarminPersonalApiKey,
   pullGarminActivitiesWithPersonalKey,
@@ -21,6 +22,7 @@ import {
   Calendar,
   Clock,
   Sparkles,
+  Cloud,
 } from 'lucide-react';
 
 interface GarminCloudSyncHubProps {
@@ -50,6 +52,7 @@ export const GarminCloudSyncHub: React.FC<GarminCloudSyncHubProps> = ({
   existingWorkouts,
   onSwitchToZipTab,
 }) => {
+  const { user } = useAuth();
   const [apiKeyInput, setApiKeyInput] = useState(cloudAccount.personalApiKey || '');
   const [showKeyText, setShowKeyText] = useState(false);
   const [deviceNameInput, setDeviceNameInput] = useState(cloudAccount.deviceName || 'Garmin Forerunner');
@@ -157,9 +160,12 @@ export const GarminCloudSyncHub: React.FC<GarminCloudSyncHubProps> = ({
 
       if (result.newActivities.length > 0) {
         onImportNewRuns(result.newActivities);
+        const destinationNotice = user
+          ? ` and persisted to Cloud Firestore for ${user.email}`
+          : ' (held in browser memory; sign in to save to Cloud Firestore)';
         setStatusMsg({
           type: 'success',
-          text: `Successfully imported ${result.newActivities.length} authentic run(s) since ${syncStartDate} from Garmin Connect (${result.duplicatesCount} duplicate(s) skipped)!`,
+          text: `Successfully imported ${result.newActivities.length} authentic run(s) since ${syncStartDate}${destinationNotice} (${result.duplicatesCount} duplicate(s) skipped)!`,
         });
       } else {
         setStatusMsg({
@@ -330,6 +336,38 @@ export const GarminCloudSyncHub: React.FC<GarminCloudSyncHubProps> = ({
             </div>
           </div>
         )}
+
+        {/* Cloud Firestore Persistence Status Banner */}
+        <div
+          className={`mt-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-lg p-3 text-xs border ${
+            user
+              ? 'bg-emerald-50/70 border-emerald-200 text-emerald-800 dark:bg-emerald-950/30 dark:border-emerald-800 dark:text-emerald-300'
+              : 'bg-amber-50/70 border-amber-200 text-amber-800 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-300'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {user ? (
+              <>
+                <ShieldCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <span>
+                  <strong>Cloud Firestore Active:</strong> Syncing activities to your private profile (<strong>{user.email}</strong>).
+                </span>
+              </>
+            ) : (
+              <>
+                <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                <span>
+                  <strong>Guest Mode:</strong> You are not signed in. Activities will be kept in browser session memory only.
+                </span>
+              </>
+            )}
+          </div>
+          {!user && (
+            <span className="text-[11px] font-semibold text-amber-700 dark:text-amber-400">
+              Sign in via top navigation bar to persist data to Firestore.
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Historical Activity Sync & Date Selection Window */}

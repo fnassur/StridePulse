@@ -18,42 +18,79 @@ export async function fetchUserWorkoutsFromCloud(userId: string): Promise<Workou
   }
 }
 
+/**
+ * Recursively strips undefined values, ensures fields match Firestore constraints,
+ * and caps trackPoints to prevent document size limit exceeded errors.
+ */
+export function sanitizeWorkoutForFirestore(workout: Workout, userId: string): Record<string, any> {
+  const title = (workout.title || 'Running Activity').slice(0, 140);
+  const distanceKm = typeof workout.distanceKm === 'number' && !isNaN(workout.distanceKm) ? workout.distanceKm : 0;
+  const durationSec = typeof workout.durationSec === 'number' && !isNaN(workout.durationSec) ? Math.round(workout.durationSec) : 0;
+
+  // Downsample trackPoints if too large (Firestore 1MB document limit)
+  let trackPoints = workout.trackPoints || [];
+  if (trackPoints.length > 500) {
+    const step = Math.ceil(trackPoints.length / 500);
+    trackPoints = trackPoints.filter((_, i) => i % step === 0);
+  }
+
+  const raw = {
+    ...workout,
+    id: workout.id,
+    title,
+    distanceKm,
+    durationSec,
+    trackPoints,
+    userId,
+    updatedAt: new Date().toISOString(),
+  };
+
+  // Strip all undefined properties across all levels (Firestore rejects undefined)
+  return JSON.parse(
+    JSON.stringify(raw, (_key, value) => {
+      if (value === undefined) {
+        return undefined; // JSON.stringify omits undefined keys
+      }
+      return value;
+    })
+  );
+}
+
 export async function saveWorkoutToCloud(userId: string, workout: Workout): Promise<void> {
+  if (!userId || !workout?.id) return;
   const path = `users/${userId}/workouts/${workout.id}`;
   try {
-    await setDoc(doc(db, 'users', userId, 'workouts', workout.id), {
-      ...workout,
-      userId,
-      updatedAt: new Date().toISOString(),
-    });
+    const cleanData = sanitizeWorkoutForFirestore(workout, userId);
+    await setDoc(doc(db, 'users', userId, 'workouts', workout.id), cleanData);
+    console.log(`[Firestore] Successfully saved workout ${workout.id} to ${path}`);
   } catch (err) {
+    console.error(`[Firestore] Error saving single workout ${workout.id}:`, err);
     handleFirestoreError(err, OperationType.WRITE, path);
   }
 }
 
 /**
- * Saves a large batch of workouts to Firestore using chunked write batches (up to 400 per commit).
+ * Saves a large batch of workouts to Firestore using chunked write batches (up to 250 per commit).
  */
 export async function saveBatchWorkoutsToCloud(userId: string, workouts: Workout[]): Promise<void> {
-  if (!workouts.length) return;
-  const CHUNK_SIZE = 400;
+  if (!workouts.length || !userId) return;
+  const CHUNK_SIZE = 250; // Firestore limit is 500 operations per batch
 
   for (let i = 0; i < workouts.length; i += CHUNK_SIZE) {
     const chunk = workouts.slice(i, i + CHUNK_SIZE);
     const batch = writeBatch(db);
 
     chunk.forEach(w => {
+      const cleanData = sanitizeWorkoutForFirestore(w, userId);
       const ref = doc(db, 'users', userId, 'workouts', w.id);
-      batch.set(ref, {
-        ...w,
-        userId,
-        updatedAt: new Date().toISOString(),
-      });
+      batch.set(ref, cleanData);
     });
 
     try {
       await batch.commit();
+      console.log(`[Firestore] Successfully committed batch of ${chunk.length} workouts to users/${userId}/workouts`);
     } catch (err) {
+      console.error(`[Firestore] Error committing batch workouts for user ${userId}:`, err);
       handleFirestoreError(err, OperationType.WRITE, `users/${userId}/workouts`);
     }
   }
