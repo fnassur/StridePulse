@@ -263,15 +263,26 @@ export function parseGarminPersonalActivity(raw: any): Workout | null {
   };
 }
 
+export interface GarminPullOptions {
+  startDate?: string; // YYYY-MM-DD
+  endDate?: string;   // YYYY-MM-DD
+  onProgress?: (totalFound: number, page: number, message: string) => void;
+}
+
 /**
  * Connects to Garmin Connect Personal API using the user's personal API key,
- * generates an access token, fetches authentic activities, and parses them.
+ * generates an access token, and pulls all authentic activities matching the date window
+ * by automatically paginating through Garmin's history without an artificial 50-item limit.
  */
 export async function pullGarminActivitiesWithPersonalKey(
   account: GarminCloudAccount,
   existingWorkouts: Workout[],
-  limit: number = 50
+  optionsOrLimit?: GarminPullOptions | number
 ): Promise<GarminSyncResult> {
+  const options: GarminPullOptions = typeof optionsOrLimit === 'object' && optionsOrLimit !== null
+    ? optionsOrLimit
+    : {};
+
   const apiKey = account.personalApiKey?.trim();
   if (!apiKey) {
     throw new Error('No Garmin Personal API Key provided. Please paste your Personal API Key to sync.');
@@ -289,55 +300,128 @@ export async function pullGarminActivitiesWithPersonalKey(
     token = tokenResult.accessToken;
   }
 
-  // Step 2: Query Garmin activity search endpoint
-  // GET /activitylist-service/activities/search/activities?limit=50&start=0
-  const searchEndpoint = `/activitylist-service/activities/search/activities?limit=${limit}&start=0`;
-  const response = await fetchGarminApi(searchEndpoint, {
-    method: 'GET',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Accept': 'application/json',
-    },
-  });
+  // Step 2: Auto-paginate through Garmin activity search endpoint
+  // GET /activitylist-service/activities/search/activities?limit=100&start=0&startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
+  const pageSize = 100;
+  let offset = 0;
+  let page = 1;
+  const maxPages = 100; // Safety guard for up to 10,000 historical activities
+  const allRawItems: any[] = [];
+  let hasMore = true;
 
-  if (!response.ok) {
-    if (response.status === 401 || response.status === 403) {
-      // Token might be rejected, try re-authenticating once with the API key
-      const retryToken = await validateGarminPersonalApiKey(apiKey);
-      if (retryToken.isValid && retryToken.accessToken) {
-        const retryRes = await fetchGarminApi(searchEndpoint, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${retryToken.accessToken}`,
-            'Accept': 'application/json',
-          },
-        });
-        if (retryRes.ok) {
-          const rawData = await retryRes.json();
-          return processRawGarminActivities(rawData, existingWorkouts);
+  while (hasMore && page <= maxPages) {
+    const params = new URLSearchParams();
+    params.set('limit', pageSize.toString());
+    params.set('start', offset.toString());
+    if (options.startDate) params.set('startDate', options.startDate);
+    if (options.endDate) params.set('endDate', options.endDate);
+
+    const searchEndpoint = `/activitylist-service/activities/search/activities?${params.toString()}`;
+    let response = await fetchGarminApi(searchEndpoint, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        // Token might have expired during long sync, try re-authenticating once
+        const retryToken = await validateGarminPersonalApiKey(apiKey);
+        if (retryToken.isValid && retryToken.accessToken) {
+          token = retryToken.accessToken;
+          response = await fetchGarminApi(searchEndpoint, {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Accept': 'application/json',
+            },
+          });
         }
       }
-      throw new Error('Garmin session expired. Please verify or update your Personal API Key.');
     }
-    throw new Error(`Garmin Connect returned status ${response.status}. Please try again.`);
+
+    if (!response.ok) {
+      if (allRawItems.length > 0) {
+        // We already collected data from previous pages, proceed with what we have
+        break;
+      }
+      throw new Error(`Garmin Connect returned status ${response.status}. Please check your key or try again.`);
+    }
+
+    const rawData = await response.json();
+    let batchList: any[] = [];
+    if (Array.isArray(rawData)) {
+      batchList = rawData;
+    } else if (rawData && Array.isArray(rawData.activities)) {
+      batchList = rawData.activities;
+    } else if (rawData && Array.isArray(rawData.activityList)) {
+      batchList = rawData.activityList;
+    }
+
+    if (batchList.length === 0) {
+      hasMore = false;
+      break;
+    }
+
+    allRawItems.push(...batchList);
+    options.onProgress?.(
+      allRawItems.length,
+      page,
+      `Retrieved ${allRawItems.length} activities (Page ${page})...`
+    );
+
+    // If batch size is smaller than requested pageSize, we reached the end of history
+    if (batchList.length < pageSize) {
+      hasMore = false;
+      break;
+    }
+
+    // Check if the oldest item in this batch is already before the requested startDate
+    if (options.startDate) {
+      const oldestItem = batchList[batchList.length - 1];
+      const oldestDateStr = oldestItem.startTimeGMT || oldestItem.startTimeLocal || oldestItem.beginTimestamp;
+      if (oldestDateStr) {
+        const oldestIso = oldestDateStr.slice(0, 10);
+        if (oldestIso < options.startDate) {
+          hasMore = false;
+          break;
+        }
+      }
+    }
+
+    offset += batchList.length;
+    page++;
   }
 
-  const rawData = await response.json();
-  return processRawGarminActivities(rawData, existingWorkouts);
+  // Filter items client-side as well to ensure strict adherence to date boundaries
+  let filteredItems = allRawItems;
+  if (options.startDate) {
+    filteredItems = filteredItems.filter(item => {
+      const d = item.startTimeGMT || item.startTimeLocal || item.beginTimestamp;
+      if (!d) return true;
+      return d.slice(0, 10) >= options.startDate!;
+    });
+  }
+  if (options.endDate) {
+    filteredItems = filteredItems.filter(item => {
+      const d = item.startTimeGMT || item.startTimeLocal || item.beginTimestamp;
+      if (!d) return true;
+      return d.slice(0, 10) <= options.endDate!;
+    });
+  }
+
+  return processRawGarminActivities(filteredItems, existingWorkouts, options.startDate);
 }
 
-function processRawGarminActivities(rawData: any, existingWorkouts: Workout[]): GarminSyncResult {
-  let list: any[] = [];
-  if (Array.isArray(rawData)) {
-    list = rawData;
-  } else if (rawData && Array.isArray(rawData.activities)) {
-    list = rawData.activities;
-  } else if (rawData && Array.isArray(rawData.activityList)) {
-    list = rawData.activityList;
-  }
-
+function processRawGarminActivities(
+  rawData: any[],
+  existingWorkouts: Workout[],
+  startDate?: string
+): GarminSyncResult {
   const parsedWorkouts: Workout[] = [];
-  for (const item of list) {
+  for (const item of rawData) {
     const workout = parseGarminPersonalActivity(item);
     if (workout) {
       parsedWorkouts.push(workout);
@@ -348,18 +432,21 @@ function processRawGarminActivities(rawData: any, existingWorkouts: Workout[]): 
     return {
       newActivities: [],
       duplicatesCount: 0,
-      message: 'Garmin Connect Personal API checked: No running activities found on your account.',
+      message: startDate
+        ? `Garmin Connect checked: No running activities found on or after ${startDate}.`
+        : 'Garmin Connect checked: No running activities found on your account.',
     };
   }
 
   // Deduplicate against existing workouts
   const { unique, duplicateCount } = deduplicateWorkouts(parsedWorkouts, existingWorkouts);
 
+  const rangeNotice = startDate ? ` since ${startDate}` : '';
   return {
     newActivities: unique,
     duplicatesCount: duplicateCount,
     message: unique.length > 0
-      ? `Successfully pulled ${unique.length} authentic run(s) from your Garmin Connect account!`
-      : `All ${duplicateCount} activities from your Garmin account are already present in your training log.`,
+      ? `Successfully pulled ${unique.length} authentic run(s)${rangeNotice} from Garmin Connect (${duplicateCount} duplicate(s) skipped)!`
+      : `All ${duplicateCount} activities${rangeNotice} are already present in your training log.`,
   };
 }

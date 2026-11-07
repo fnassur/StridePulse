@@ -35,6 +35,8 @@ Enable StridePulse to pull authentic training and running activity data directly
 4. **Cloud Firestore Sync (`src/services/firestoreSync.ts` & `src/App.tsx`)**:
    - Saves Personal API credentials under user's private cloud document.
    - Real-time batch writing to user-isolated Firestore collections.
-5. **Full Mock & Synthetic Data Purge**:
-   - Removed all fake run generators and hardcoded metrics overrides.
-   - Clean empty states informing users how to link their Garmin Personal API Key or drop archive files.
+6. **Historical Date Range Prompt & Unlimited Auto-Pagination**:
+   - Replaced fixed 50-activity limit with an automated pagination engine querying Garmin's `/activitylist-service/activities/search/activities` with `limit=100` and `start` offset.
+   - Built interactive Historical Activity Sync Window in `GarminCloudSyncHub.tsx` prompting the user for **Start Date** and **End Date** with quick presets (Past 30 Days, Past 90 Days, Past 1 Year, Past 3 Years, All-Time).
+   - Added live progress indicators displaying real-time counts and pages retrieved during deep historical backfills.
+   - Both client-side date gating and Garmin server filtering ensure precise activity boundary enforcement.

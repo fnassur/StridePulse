@@ -18,6 +18,9 @@ import {
   Eye,
   EyeOff,
   Trash2,
+  Calendar,
+  Clock,
+  Sparkles,
 } from 'lucide-react';
 
 interface GarminCloudSyncHubProps {
@@ -28,6 +31,16 @@ interface GarminCloudSyncHubProps {
   existingWorkouts: Workout[];
   onSwitchToZipTab?: () => void;
 }
+
+const getPresetStartDate = (preset: '30d' | '90d' | '1y' | '3y' | 'all'): string => {
+  const d = new Date();
+  if (preset === '30d') d.setDate(d.getDate() - 30);
+  else if (preset === '90d') d.setDate(d.getDate() - 90);
+  else if (preset === '1y') d.setFullYear(d.getFullYear() - 1);
+  else if (preset === '3y') d.setFullYear(d.getFullYear() - 3);
+  else if (preset === 'all') return '2015-01-01';
+  return d.toISOString().slice(0, 10);
+};
 
 export const GarminCloudSyncHub: React.FC<GarminCloudSyncHubProps> = ({
   cloudAccount,
@@ -41,6 +54,13 @@ export const GarminCloudSyncHub: React.FC<GarminCloudSyncHubProps> = ({
   const [showKeyText, setShowKeyText] = useState(false);
   const [deviceNameInput, setDeviceNameInput] = useState(cloudAccount.deviceName || 'Garmin Forerunner');
   const [emailInput, setEmailInput] = useState(cloudAccount.email || '');
+
+  // Date window state
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const [activePreset, setActivePreset] = useState<'30d' | '90d' | '1y' | '3y' | 'all' | 'custom'>('1y');
+  const [syncStartDate, setSyncStartDate] = useState(() => getPresetStartDate('1y'));
+  const [syncEndDate, setSyncEndDate] = useState(todayStr);
+  const [syncProgressMsg, setSyncProgressMsg] = useState<string | null>(null);
 
   // UI state
   const [isValidatingKey, setIsValidatingKey] = useState(false);
@@ -103,7 +123,13 @@ export const GarminCloudSyncHub: React.FC<GarminCloudSyncHubProps> = ({
     }
   };
 
-  // Pull authentic activities from Garmin using Personal API Key
+  const handleSelectPreset = (preset: '30d' | '90d' | '1y' | '3y' | 'all') => {
+    setActivePreset(preset);
+    setSyncStartDate(getPresetStartDate(preset));
+    setSyncEndDate(todayStr);
+  };
+
+  // Pull authentic activities from Garmin using Personal API Key with historical date range
   const handlePullActivities = async () => {
     if (!cloudAccount.personalApiKey) {
       setIsEditingKey(true);
@@ -111,22 +137,34 @@ export const GarminCloudSyncHub: React.FC<GarminCloudSyncHubProps> = ({
       return;
     }
 
+    if (!syncStartDate) {
+      setStatusMsg({ type: 'error', text: 'Please select a start date from which activities should be pulled.' });
+      return;
+    }
+
     setIsSyncing(true);
     setStatusMsg(null);
+    setSyncProgressMsg(`Connecting to Garmin Connect Personal API...`);
 
     try {
-      const result = await pullGarminActivitiesWithPersonalKey(cloudAccount, existingWorkouts, 50);
+      const result = await pullGarminActivitiesWithPersonalKey(cloudAccount, existingWorkouts, {
+        startDate: syncStartDate,
+        endDate: syncEndDate || undefined,
+        onProgress: (total, page, msg) => {
+          setSyncProgressMsg(msg);
+        },
+      });
 
       if (result.newActivities.length > 0) {
         onImportNewRuns(result.newActivities);
         setStatusMsg({
           type: 'success',
-          text: `Successfully imported ${result.newActivities.length} authentic run(s) from Garmin Connect!`,
+          text: `Successfully imported ${result.newActivities.length} authentic run(s) since ${syncStartDate} from Garmin Connect (${result.duplicatesCount} duplicate(s) skipped)!`,
         });
       } else {
         setStatusMsg({
           type: 'info',
-          text: result.message || 'Garmin Connect checked: No new activities found on your account.',
+          text: result.message || `Garmin Connect checked: No new activities found on or after ${syncStartDate}.`,
         });
       }
 
@@ -143,6 +181,7 @@ export const GarminCloudSyncHub: React.FC<GarminCloudSyncHubProps> = ({
       });
     } finally {
       setIsSyncing(false);
+      setSyncProgressMsg(null);
     }
   };
 
@@ -292,6 +331,128 @@ export const GarminCloudSyncHub: React.FC<GarminCloudSyncHubProps> = ({
           </div>
         )}
       </div>
+
+      {/* Historical Activity Sync & Date Selection Window */}
+      {cloudAccount.isConnected && cloudAccount.personalApiKey && !isEditingKey && (
+        <div className="rounded-xl border border-orange-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 shadow-xs space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 border-b border-slate-100 pb-3 dark:border-slate-800">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-100 text-orange-600 dark:bg-orange-950/60 dark:text-orange-400">
+                <Calendar className="h-5 w-5" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                  <span>Historical Activity Sync Window</span>
+                  <span className="rounded-md bg-orange-100 px-1.5 py-0.5 text-[10px] font-semibold text-orange-700 dark:bg-orange-950/60 dark:text-orange-300">
+                    No 50-Run Limit
+                  </span>
+                </h4>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Select the start date to review historical data. StridePulse will automatically page through Garmin Connect and pull all runs on or after this date.
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handlePullActivities}
+              disabled={isSyncing || !syncStartDate}
+              className="flex items-center justify-center gap-2 rounded-lg bg-orange-600 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-orange-500 disabled:opacity-60 transition-colors shrink-0"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+              <span>{isSyncing ? 'Pulling History...' : 'Pull Historical Runs'}</span>
+            </button>
+          </div>
+
+          {/* Quick Date Presets */}
+          <div className="space-y-1.5">
+            <label className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-wider block">
+              Quick Historical Presets
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { id: '30d', label: 'Past 30 Days' },
+                { id: '90d', label: 'Past 90 Days' },
+                { id: '1y', label: 'Past 1 Year (Recommended)' },
+                { id: '3y', label: 'Past 3 Years' },
+                { id: 'all', label: 'All-Time (Since 2015)' },
+              ].map(preset => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  onClick={() => handleSelectPreset(preset.id as any)}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-medium border transition-all ${
+                    activePreset === preset.id
+                      ? 'border-orange-500 bg-orange-50 text-orange-700 dark:bg-orange-950/50 dark:text-orange-300 font-semibold shadow-2xs'
+                      : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Date Picker Row */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+            <div>
+              <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1 flex items-center gap-1.5">
+                <Clock className="h-3.5 w-3.5 text-orange-500" />
+                <span>Pull Activities From (Start Date)</span>
+                <span className="text-rose-500">*</span>
+              </label>
+              <input
+                type="date"
+                value={syncStartDate}
+                max={syncEndDate || todayStr}
+                onChange={e => {
+                  setSyncStartDate(e.target.value);
+                  setActivePreset('custom');
+                }}
+                className="w-full rounded-lg border border-slate-200 bg-slate-50/70 px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white font-mono focus:bg-white focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+                required
+              />
+              <span className="text-[10px] text-slate-400 mt-1 block">
+                All authentic running sessions on or after this date will be retrieved.
+              </span>
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1 flex items-center gap-1.5">
+                <Clock className="h-3.5 w-3.5 text-slate-400" />
+                <span>To Date (End Date)</span>
+              </label>
+              <input
+                type="date"
+                value={syncEndDate}
+                min={syncStartDate}
+                max={todayStr}
+                onChange={e => {
+                  setSyncEndDate(e.target.value);
+                  setActivePreset('custom');
+                }}
+                className="w-full rounded-lg border border-slate-200 bg-slate-50/70 px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white font-mono focus:bg-white focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+              />
+              <span className="text-[10px] text-slate-400 mt-1 block">
+                Defaults to today. Change to review a specific historical window or race block.
+              </span>
+            </div>
+          </div>
+
+          {/* Sync Progress Live Indicator */}
+          {isSyncing && syncProgressMsg && (
+            <div className="flex items-center gap-3 rounded-lg bg-orange-50 border border-orange-200 p-3 text-xs text-orange-900 dark:bg-orange-950/40 dark:border-orange-800 dark:text-orange-200 animate-pulse">
+              <RefreshCw className="h-4 w-4 animate-spin text-orange-600 dark:text-orange-400 shrink-0" />
+              <div className="space-y-0.5">
+                <p className="font-semibold">{syncProgressMsg}</p>
+                <p className="text-[11px] text-orange-700 dark:text-orange-300">
+                  Paging through Garmin Connect history... Duplicate runs will be automatically detected and skipped.
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* API Key Setup / Edit Form */}
       {isEditingKey && (
