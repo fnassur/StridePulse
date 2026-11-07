@@ -25,24 +25,21 @@ async function fetchGarminApi(endpoint: string, options: RequestInit = {}): Prom
   const proxyUrl = `${BASE_PROXY_URL}${endpoint}`;
   try {
     const res = await fetch(proxyUrl, options);
-    // If proxy responds (even with 4xx/5xx from Garmin), return it
-    if (res.status !== 404 && res.status !== 502) {
-      return res;
-    }
-  } catch {
+    return res;
+  } catch (err) {
     // Proxy request failed, attempt direct
+    const directUrl = `${DIRECT_GARMIN_URL}${endpoint}`;
+    return fetch(directUrl, options);
   }
-
-  // Direct fetch fallback
-  const directUrl = `${DIRECT_GARMIN_URL}${endpoint}`;
-  return fetch(directUrl, options);
 }
 
 /**
- * Validates a Garmin Connect Personal API Key by attempting to generate a temporary access token.
+ * Validates a Garmin Connect Personal API Key by exchanging it for an access token.
  * Garmin Connect Personal API documentation:
- * POST /personalapitoken-service/personal-api/personal-api-key/token
+ * Endpoint: POST https://personal.connectapi.garmin.com/personalapitoken-service/personal-api/personal-api-key/token
  * Header: Authorization: ApiKey <your-personal-api-key>
+ *
+ * The endpoint returns the temporary access token (typically as a raw JWT string or JSON).
  */
 export async function validateGarminPersonalApiKey(apiKey: string): Promise<{
   isValid: boolean;
@@ -60,7 +57,7 @@ export async function validateGarminPersonalApiKey(apiKey: string): Promise<{
       method: 'POST',
       headers: {
         'Authorization': `ApiKey ${cleanKey}`,
-        'Accept': 'application/json',
+        'Accept': '*/*',
       },
     });
 
@@ -68,7 +65,7 @@ export async function validateGarminPersonalApiKey(apiKey: string): Promise<{
       if (response.status === 401 || response.status === 403) {
         return {
           isValid: false,
-          error: 'Authentication failed. Please check that your Personal API Key is active and has not expired.',
+          error: 'Authentication failed. Please check that your Personal API Key is active and has not expired in Garmin Connect settings.',
         };
       }
       return {
@@ -77,20 +74,59 @@ export async function validateGarminPersonalApiKey(apiKey: string): Promise<{
       };
     }
 
-    const data = await response.json();
-    const accessToken = data.accessToken || data.access_token || data.token;
+    const rawText = await response.text();
+    let accessToken = rawText.trim();
+    let expiresIn = 3600;
+
+    // Check if response is JSON (either object or quoted string)
+    try {
+      const parsed = JSON.parse(rawText);
+      if (typeof parsed === 'string') {
+        accessToken = parsed.trim();
+      } else if (parsed && typeof parsed === 'object') {
+        accessToken = parsed.accessToken || parsed.access_token || parsed.token || accessToken;
+        if (typeof parsed.expiresIn === 'number') expiresIn = parsed.expiresIn;
+        else if (typeof parsed.expires_in === 'number') expiresIn = parsed.expires_in;
+      }
+    } catch {
+      // Plain text token (raw JWT string from Garmin Personal API)
+    }
+
+    // Strip any surrounding quotes or whitespace
+    accessToken = accessToken.replace(/^["']|["']$/g, '').trim();
 
     if (!accessToken) {
       return {
         isValid: false,
-        error: 'Received unexpected response format from Garmin Personal API.',
+        error: 'Received empty response from Garmin Personal API token service.',
       };
+    }
+
+    // Try decoding JWT payload to extract actual expiration if available
+    try {
+      const parts = accessToken.split('.');
+      if (parts.length === 3) {
+        const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+        const jsonPayload = decodeURIComponent(
+          atob(base64)
+            .split('')
+            .map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+            .join('')
+        );
+        const jwtData = JSON.parse(jsonPayload);
+        if (jwtData.exp && typeof jwtData.exp === 'number') {
+          const nowSec = Math.floor(Date.now() / 1000);
+          expiresIn = Math.max(60, jwtData.exp - nowSec);
+        }
+      }
+    } catch {
+      // Non-critical: keep default expiresIn
     }
 
     return {
       isValid: true,
       accessToken,
-      expiresIn: data.expiresIn || data.expires_in || 3600,
+      expiresIn,
     };
   } catch (err: any) {
     return {

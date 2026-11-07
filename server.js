@@ -29,13 +29,21 @@ app.use('/api/garmin', async (req, res) => {
       for await (const chunk of req) {
         chunks.push(chunk);
       }
-      options.body = Buffer.concat(chunks);
+      const bodyBuffer = Buffer.concat(chunks);
+      if (bodyBuffer.length > 0) {
+        options.body = bodyBuffer;
+      } else {
+        delete headers['content-length'];
+      }
     }
 
     const apiRes = await fetch(targetUrl, options);
     res.status(apiRes.status);
     apiRes.headers.forEach((val, key) => {
-      res.setHeader(key, val);
+      // Do not copy compression or transfer encoding headers as fetch arrayBuffer decodes them
+      if (key.toLowerCase() !== 'content-encoding' && key.toLowerCase() !== 'transfer-encoding') {
+        res.setHeader(key, val);
+      }
     });
     const buffer = await apiRes.arrayBuffer();
     res.send(Buffer.from(buffer));
