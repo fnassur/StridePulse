@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Workout, PlannedWorkout } from '../types/workout';
+import { Workout, PlannedWorkout, GarminCloudAccount } from '../types/workout';
 import { formatPace, formatDuration, getUniformSplits } from '../utils/parsers';
 import { TelemetryChart } from './TelemetryChart';
 import { RouteVisualizer } from './RouteVisualizer';
@@ -22,6 +22,7 @@ import {
   Sliders,
   Check,
   X,
+  RefreshCw,
 } from 'lucide-react';
 
 interface WorkoutDetailViewProps {
@@ -34,6 +35,8 @@ interface WorkoutDetailViewProps {
   onMapWorkoutToPlanned?: (workoutId: string, plannedWorkoutId: string | null) => void;
   onScheduleWorkoutToDate?: (plannedId: string, dateIso: string) => void;
   distanceUnit: 'km' | 'mi';
+  onHydrateWorkout?: (workout: Workout) => Promise<Workout>;
+  cloudAccount?: GarminCloudAccount;
 }
 
 export const WorkoutDetailView: React.FC<WorkoutDetailViewProps> = ({
@@ -46,7 +49,10 @@ export const WorkoutDetailView: React.FC<WorkoutDetailViewProps> = ({
   onMapWorkoutToPlanned,
   onScheduleWorkoutToDate,
   distanceUnit,
+  onHydrateWorkout,
+  cloudAccount,
 }) => {
+  const [isDetailHydrating, setIsDetailHydrating] = useState(false);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [notes, setNotes] = useState(workout.notes || '');
   const [perceivedEffort, setPerceivedEffort] = useState(workout.perceivedEffort || 6);
@@ -583,6 +589,8 @@ export const WorkoutDetailView: React.FC<WorkoutDetailViewProps> = ({
         currentWorkout={workout}
         allWorkouts={allWorkouts}
         distanceUnit={distanceUnit}
+        onHydrateWorkout={onHydrateWorkout}
+        cloudAccount={cloudAccount}
       />
 
       {/* Telemetry Chart & Route Visualizer 2-column or stacked layout */}
@@ -609,7 +617,7 @@ export const WorkoutDetailView: React.FC<WorkoutDetailViewProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Splits Breakdown */}
         <div className="lg:col-span-8 rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 transition-colors">
-          <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+          <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
             <div>
               <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                 {distanceUnit === 'mi' ? '1.0-Mile' : '1.0-Km'} Splits Breakdown
@@ -618,9 +626,30 @@ export const WorkoutDetailView: React.FC<WorkoutDetailViewProps> = ({
                 Uniform {distanceUnit === 'mi' ? '1.00 mi' : '1.00 km'} auto-lap intervals
               </p>
             </div>
-            <span className="text-xs text-slate-400 font-mono">
-              {uniformSplits.length} splits
-            </span>
+            <div className="flex items-center gap-3">
+              {(!workout.splits || workout.splits.length < 2) && (workout.source === 'garmin_cloud' || workout.id.startsWith('garmin_')) && onHydrateWorkout && (
+                <button
+                  type="button"
+                  disabled={isDetailHydrating}
+                  onClick={async () => {
+                    setIsDetailHydrating(true);
+                    try {
+                      const enriched = await onHydrateWorkout(workout);
+                      onUpdateWorkout(enriched);
+                    } finally {
+                      setIsDetailHydrating(false);
+                    }
+                  }}
+                  className="flex items-center gap-1.5 rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-500 shadow-xs transition-colors disabled:opacity-60"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${isDetailHydrating ? 'animate-spin' : ''}`} />
+                  <span>{isDetailHydrating ? 'Fetching Telemetry...' : 'Fetch Granular Garmin Laps & FIT'}</span>
+                </button>
+              )}
+              <span className="text-xs text-slate-400 font-mono">
+                {uniformSplits.length} splits
+              </span>
+            </div>
           </div>
 
           <div className="mt-3 overflow-x-auto">

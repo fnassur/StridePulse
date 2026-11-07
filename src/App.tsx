@@ -29,6 +29,7 @@ import {
   fetchUserGarminAccountFromCloud,
   saveUserGarminAccountToCloud,
 } from './services/firestoreSync';
+import { hydrateGarminActivityTelemetry } from './services/garminConnectService';
 import { deduplicateWorkouts } from './utils/deduplication';
 import { Watch, Flame, Trophy, TrendingUp } from 'lucide-react';
 
@@ -427,6 +428,46 @@ function StridePulseApp() {
     }
   };
 
+  // On-demand telemetry hydration for authentic Garmin activities
+  const handleHydrateWorkout = async (workoutToHydrate: Workout): Promise<Workout> => {
+    if (!workoutToHydrate) return workoutToHydrate;
+    // Only attempt hydration for Garmin activities
+    const isGarmin = workoutToHydrate.source === 'garmin_cloud' || workoutToHydrate.id.startsWith('garmin_');
+    if (!isGarmin) return workoutToHydrate;
+
+    try {
+      console.log(`[App] Hydrating authentic telemetry for Garmin activity ${workoutToHydrate.id}...`);
+      const hydrated = await hydrateGarminActivityTelemetry(cloudAccount, workoutToHydrate);
+
+      const hadNoSplits = (!workoutToHydrate.splits || workoutToHydrate.splits.length < 2);
+      const nowHasSplits = (hydrated.splits && hydrated.splits.length >= 2);
+      const hadNoPts = (!workoutToHydrate.trackPoints || workoutToHydrate.trackPoints.length < 5);
+      const nowHasPts = (hydrated.trackPoints && hydrated.trackPoints.length >= 5);
+
+      if (nowHasSplits || nowHasPts) {
+        console.log(`[App] Activity ${workoutToHydrate.id} enriched with ${hydrated.splits?.length || 0} splits and ${hydrated.trackPoints?.length || 0} trackpoints!`);
+
+        // Update local workout state
+        setWorkouts(prev => prev.map(w => (w.id === hydrated.id ? hydrated : w)));
+        if (selectedWorkout?.id === hydrated.id) {
+          setSelectedWorkout(hydrated);
+        }
+
+        // Persist enriched workout to Cloud Firestore if logged in
+        if (user) {
+          saveWorkoutToCloud(user.uid, hydrated).catch(err => {
+            console.error('[App] Failed to save hydrated workout to Firestore:', err);
+          });
+        }
+      }
+
+      return hydrated;
+    } catch (err) {
+      console.error('[App] Telemetry hydration failed:', err);
+      return workoutToHydrate;
+    }
+  };
+
   // Synchronize selectedWorkout with workouts state whenever updated or normalized
   useEffect(() => {
     if (selectedWorkout) {
@@ -477,6 +518,8 @@ function StridePulseApp() {
             onMapWorkoutToPlanned={handleMapWorkoutToPlanned}
             onScheduleWorkoutToDate={handleScheduleWorkoutToDate}
             distanceUnit={distanceUnit}
+            onHydrateWorkout={handleHydrateWorkout}
+            cloudAccount={cloudAccount}
           />
         ) : currentTab === 'dashboard' ? (
           <DashboardView
@@ -521,6 +564,8 @@ function StridePulseApp() {
             workouts={workouts}
             onSelectWorkout={setSelectedWorkout}
             distanceUnit={distanceUnit}
+            onHydrateWorkout={handleHydrateWorkout}
+            cloudAccount={cloudAccount}
           />
         )}
       </main>

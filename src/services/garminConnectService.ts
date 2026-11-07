@@ -428,6 +428,180 @@ export async function pullGarminActivitiesWithPersonalKey(
   return processRawGarminActivities(filteredItems, existingWorkouts, options.startDate);
 }
 
+/**
+ * Hydrates an authentic Garmin activity with granular telemetry (lap splits and GPS track points).
+ * 1. Checks if the activity already has granular telemetry.
+ * 2. If not, queries Garmin Personal API:
+ *    Primary: GET /download-service/files/activity/{activityId} -> Binary .FIT file -> parsed with parseFIT
+ *    Fallback: GET /activity-service/activity/{activityId} -> JSON with activityLaps/lapDTOs
+ * 3. Merges decoded telemetry into the workout while preserving user edits, title, and metadata.
+ */
+export async function hydrateGarminActivityTelemetry(
+  account: GarminCloudAccount,
+  workout: Workout
+): Promise<Workout> {
+  if (!workout) return workout;
+
+  // Check if activity already has rich telemetry (at least 2 valid splits or dense trackpoints)
+  const validSplits = (workout.splits || []).filter(s => s && s.paceSecKm >= 120 && s.paceSecKm <= 1200);
+  const trackPointsCount = (workout.trackPoints || []).length;
+  if (validSplits.length >= 2 && trackPointsCount >= 10) {
+    return workout;
+  }
+
+  // Extract clean numeric activity ID
+  let activityId = workout.id.replace(/^garmin_/, '').trim();
+  if (!/^\d+$/.test(activityId)) {
+    const match = workout.sourceFileName?.match(/(\d{6,})/) || workout.notes?.match(/Activity ID:\s*(\d+)/i);
+    if (match) {
+      activityId = match[1];
+    }
+  }
+
+  if (!activityId || !/^\d+$/.test(activityId)) {
+    console.warn(`[Garmin Hydration] Cannot extract numeric Garmin activity ID from workout "${workout.title}" (${workout.id})`);
+    return workout;
+  }
+
+  // Ensure active token
+  let token = account.accessToken;
+  const isTokenExpired = !account.tokenExpiresAt || Date.now() > account.tokenExpiresAt - 60000;
+
+  if (!token || isTokenExpired) {
+    const apiKey = account.personalApiKey?.trim();
+    if (!apiKey) {
+      console.warn('[Garmin Hydration] No personal API key configured to hydrate activity telemetry.');
+      return workout;
+    }
+    const tokenResult = await validateGarminPersonalApiKey(apiKey);
+    if (!tokenResult.isValid || !tokenResult.accessToken) {
+      console.warn('[Garmin Hydration] Failed to obtain token:', tokenResult.error);
+      return workout;
+    }
+    token = tokenResult.accessToken;
+  }
+
+  // Primary Attempt: Download authentic binary .FIT file
+  // Endpoint: GET /download-service/files/activity/{activityId}
+  try {
+    const fitRes = await fetchGarminApi(`/download-service/files/activity/${activityId}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/octet-stream, */*',
+      },
+    });
+
+    if (fitRes.ok) {
+      const buffer = await fitRes.arrayBuffer();
+      if (buffer && buffer.byteLength >= 14) {
+        const dv = new DataView(buffer);
+        const tag = String.fromCharCode(
+          dv.getUint8(8),
+          dv.getUint8(9),
+          dv.getUint8(10),
+          dv.getUint8(11)
+        );
+
+        if (tag === '.FIT') {
+          console.log(`[Garmin Hydration] Successfully retrieved authentic .FIT binary for activity ${activityId} (${buffer.byteLength} bytes)`);
+          const { parseFIT } = await import('../utils/parsers');
+          const fitWorkout = parseFIT(buffer, workout.sourceFileName || `garmin_personal_${activityId}.fit`);
+
+          return {
+            ...workout,
+            splits: fitWorkout.splits && fitWorkout.splits.length > 0 ? fitWorkout.splits : workout.splits,
+            trackPoints: fitWorkout.trackPoints && fitWorkout.trackPoints.length > 0 ? fitWorkout.trackPoints : workout.trackPoints,
+            movingDurationSec: fitWorkout.movingDurationSec || workout.movingDurationSec,
+            elapsedDurationSec: fitWorkout.elapsedDurationSec || workout.elapsedDurationSec,
+            timerDurationSec: fitWorkout.timerDurationSec || workout.timerDurationSec,
+            stoppedDurationSec: fitWorkout.stoppedDurationSec !== undefined ? fitWorkout.stoppedDurationSec : workout.stoppedDurationSec,
+            avgPaceSecKm: fitWorkout.avgPaceSecKm || workout.avgPaceSecKm,
+            elapsedPaceSecKm: fitWorkout.elapsedPaceSecKm || workout.elapsedPaceSecKm,
+            elevationGainM: fitWorkout.elevationGainM || workout.elevationGainM,
+            avgHeartRate: fitWorkout.avgHeartRate ?? workout.avgHeartRate,
+            maxHeartRate: fitWorkout.maxHeartRate ?? workout.maxHeartRate,
+            avgCadence: fitWorkout.avgCadence ?? workout.avgCadence,
+            avgPower: fitWorkout.avgPower ?? workout.avgPower,
+            maxPower: fitWorkout.maxPower ?? workout.maxPower,
+            calories: fitWorkout.calories || workout.calories,
+            source: 'garmin_cloud',
+          };
+        }
+      }
+    }
+  } catch (fitErr) {
+    console.warn(`[Garmin Hydration] Direct FIT file download not available for ${activityId}, trying Activity Service fallback:`, fitErr);
+  }
+
+  // Fallback Attempt: Query JSON activity details endpoint
+  // Endpoint: GET /activity-service/activity/{activityId}
+  try {
+    const detailRes = await fetchGarminApi(`/activity-service/activity/${activityId}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/json',
+      },
+    });
+
+    if (detailRes.ok) {
+      const data = await detailRes.json();
+      console.log(`[Garmin Hydration] Retrieved activity details JSON for ${activityId}`);
+
+      const rawLaps = (Array.isArray(data.activityLaps) && data.activityLaps.length > 0)
+        ? data.activityLaps
+        : (Array.isArray(data.lapDTOs) && data.lapDTOs.length > 0)
+        ? data.lapDTOs
+        : (Array.isArray(data.laps) && data.laps.length > 0)
+        ? data.laps
+        : [];
+
+      const splits: LapSplit[] = [];
+      if (Array.isArray(rawLaps) && rawLaps.length > 0) {
+        rawLaps.forEach((lap: any, idx: number) => {
+          const rawDistM = lap.distance || 0;
+          const lapDistKm = rawDistM > 100 ? rawDistM / 1000 : rawDistM;
+          const lapMoving = Math.round(lap.movingDuration || lap.duration || 0);
+          const paceSecKm = lapDistKm > 0.05 ? Math.round(lapMoving / lapDistKm) : workout.avgPaceSecKm;
+
+          // Only accept realistic running splits (120s to 1200s/km)
+          if (paceSecKm >= 120 && paceSecKm <= 1200 && lapDistKm >= 0.05 && lapMoving >= 10) {
+            splits.push({
+              splitNumber: idx + 1,
+              distanceKm: Number(lapDistKm.toFixed(2)),
+              durationSec: lapMoving,
+              movingDurationSec: lapMoving,
+              elapsedDurationSec: Math.round(lap.elapsedDuration || lapMoving),
+              paceSecKm,
+              elevationDeltaM: Math.round(lap.elevationGain || 0),
+              avgHeartRate: lap.averageHR ? Math.round(lap.averageHR) : undefined,
+              avgCadence: lap.averageRunningCadenceInStepsPerMinute ? Math.round(lap.averageRunningCadenceInStepsPerMinute) : undefined,
+            });
+          }
+        });
+      }
+
+      if (splits.length > 0) {
+        return {
+          ...workout,
+          splits,
+          avgPower: data.avgPower ? Math.round(data.avgPower) : (data.averagePower ? Math.round(data.averagePower) : workout.avgPower),
+          maxPower: data.maxPower ? Math.round(data.maxPower) : workout.maxPower,
+          elevationGainM: Math.round(data.elevationGain || data.totalElevationGain || workout.elevationGainM),
+          avgHeartRate: data.averageHR ? Math.round(data.averageHR) : workout.avgHeartRate,
+          maxHeartRate: data.maxHR ? Math.round(data.maxHR) : workout.maxHeartRate,
+          avgCadence: data.averageRunningCadenceInStepsPerMinute ? Math.round(data.averageRunningCadenceInStepsPerMinute) : workout.avgCadence,
+        };
+      }
+    }
+  } catch (jsonErr) {
+    console.warn(`[Garmin Hydration] Activity details query error for ${activityId}:`, jsonErr);
+  }
+
+  return workout;
+}
+
 function processRawGarminActivities(
   rawData: any[],
   existingWorkouts: Workout[],

@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Workout } from '../types/workout';
+import { Workout, GarminCloudAccount } from '../types/workout';
 import { formatPace, formatDuration } from '../utils/parsers';
 import { SimilarRunsCard } from './SimilarRunsCard';
 import { TrendingUp, ChevronRight, Activity, Calendar } from 'lucide-react';
@@ -8,12 +8,16 @@ interface SimilarRunsViewProps {
   workouts: Workout[];
   onSelectWorkout: (workout: Workout) => void;
   distanceUnit: 'km' | 'mi';
+  onHydrateWorkout?: (workout: Workout) => Promise<Workout>;
+  cloudAccount?: GarminCloudAccount;
 }
 
 export const SimilarRunsView: React.FC<SimilarRunsViewProps> = ({
   workouts,
   onSelectWorkout,
   distanceUnit,
+  onHydrateWorkout,
+  cloudAccount,
 }) => {
   // Find the latest completed run as the primary anchor
   const latestWorkout = useMemo(() => {
@@ -183,6 +187,8 @@ export const SimilarRunsView: React.FC<SimilarRunsViewProps> = ({
           const w = workouts.find(x => x.id === workoutId);
           if (w) onSelectWorkout(w);
         }}
+        onHydrateWorkout={onHydrateWorkout}
+        cloudAccount={cloudAccount}
       />
     </div>
   );

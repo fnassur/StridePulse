@@ -1,5 +1,5 @@
-import React, { useState, useMemo, useRef } from 'react';
-import { Workout } from '../types/workout';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
+import { Workout, GarminCloudAccount } from '../types/workout';
 import { findSimilarWorkouts } from '../utils/similarityEngine';
 import { formatPace, formatDuration, getUniformSplits } from '../utils/parsers';
 import {
@@ -16,6 +16,7 @@ import {
   Filter,
   X,
   Trophy,
+  RefreshCw,
 } from 'lucide-react';
 
 interface SimilarRunsCardProps {
@@ -23,6 +24,8 @@ interface SimilarRunsCardProps {
   allWorkouts: Workout[];
   distanceUnit: 'km' | 'mi';
   onSelectWorkout?: (workoutId: string) => void;
+  onHydrateWorkout?: (workout: Workout) => Promise<Workout>;
+  cloudAccount?: GarminCloudAccount;
 }
 
 export const SimilarRunsCard: React.FC<SimilarRunsCardProps> = ({
@@ -30,6 +33,8 @@ export const SimilarRunsCard: React.FC<SimilarRunsCardProps> = ({
   allWorkouts,
   distanceUnit,
   onSelectWorkout,
+  onHydrateWorkout,
+  cloudAccount,
 }) => {
   const unitMultiplier = distanceUnit === 'mi' ? 0.621371 : 1.0;
   const unitLabel = distanceUnit;
@@ -123,6 +128,49 @@ export const SimilarRunsCard: React.FC<SimilarRunsCardProps> = ({
     if (smartMatches.length > 0) return smartMatches[0].workout;
     return allWorkouts.find(w => w.id !== currentWorkout.id);
   }, [allWorkouts, selectedBaselineId, smartMatches, candidateRuns, currentWorkout.id]);
+
+  // Check if either current run or selected baseline run needs granular telemetry hydration
+  const isCurrentNeedsHydration = useMemo(() => {
+    const validSplits = (currentWorkout.splits || []).filter(s => s && s.paceSecKm >= 120 && s.paceSecKm <= 1200);
+    const ptsCount = (currentWorkout.trackPoints || []).length;
+    return (currentWorkout.source === 'garmin_cloud' || currentWorkout.id.startsWith('garmin_')) && validSplits.length < 2 && ptsCount < 5;
+  }, [currentWorkout]);
+
+  const isPrevNeedsHydration = useMemo(() => {
+    if (!prevWorkout) return false;
+    const validSplits = (prevWorkout.splits || []).filter(s => s && s.paceSecKm >= 120 && s.paceSecKm <= 1200);
+    const ptsCount = (prevWorkout.trackPoints || []).length;
+    return (prevWorkout.source === 'garmin_cloud' || prevWorkout.id.startsWith('garmin_')) && validSplits.length < 2 && ptsCount < 5;
+  }, [prevWorkout]);
+
+  const [isHydrating, setIsHydrating] = useState(false);
+  const [hydrationNotice, setHydrationNotice] = useState<string | null>(null);
+  const hydratedIdsRef = useRef<Set<string>>(new Set());
+
+  // Automatic background hydration for authentic Garmin activities
+  useEffect(() => {
+    if (!onHydrateWorkout) return;
+    const targets: Workout[] = [];
+    if (isCurrentNeedsHydration && !hydratedIdsRef.current.has(currentWorkout.id)) {
+      targets.push(currentWorkout);
+    }
+    if (prevWorkout && isPrevNeedsHydration && !hydratedIdsRef.current.has(prevWorkout.id)) {
+      targets.push(prevWorkout);
+    }
+
+    if (targets.length === 0) return;
+
+    targets.forEach(t => hydratedIdsRef.current.add(t.id));
+    setIsHydrating(true);
+    setHydrationNotice('Retrieving authentic granular telemetry from Garmin Connect...');
+
+    Promise.all(targets.map(t => onHydrateWorkout(t)))
+      .catch(err => console.warn('[SimilarRunsCard] Auto-hydration error:', err))
+      .finally(() => {
+        setIsHydrating(false);
+        setHydrationNotice(null);
+      });
+  }, [currentWorkout.id, prevWorkout?.id, isCurrentNeedsHydration, isPrevNeedsHydration, onHydrateWorkout]);
 
   if (!prevWorkout) {
     return (
@@ -699,7 +747,7 @@ export const SimilarRunsCard: React.FC<SimilarRunsCardProps> = ({
               </span>
             </div>
 
-            <div className="flex items-center gap-4">
+            <div className="flex flex-wrap items-center gap-3">
               {/* Legend */}
               <div className="flex items-center gap-3 text-[11px]">
                 <div className="flex items-center gap-1.5">
@@ -719,6 +767,34 @@ export const SimilarRunsCard: React.FC<SimilarRunsCardProps> = ({
                   </span>
                 </div>
               </div>
+
+              {/* On-Demand Telemetry Hydration Button if runs need granular laps/FIT */}
+              {(isCurrentNeedsHydration || isPrevNeedsHydration) && onHydrateWorkout && (
+                <button
+                  type="button"
+                  disabled={isHydrating}
+                  onClick={() => {
+                    const targets = [
+                      isCurrentNeedsHydration ? currentWorkout : null,
+                      prevWorkout && isPrevNeedsHydration ? prevWorkout : null,
+                    ].filter(Boolean) as Workout[];
+                    if (targets.length > 0) {
+                      setIsHydrating(true);
+                      setHydrationNotice('Hydrating granular lap splits from Garmin...');
+                      Promise.all(targets.map(t => onHydrateWorkout(t)))
+                        .finally(() => {
+                          setIsHydrating(false);
+                          setHydrationNotice(null);
+                        });
+                    }
+                  }}
+                  className="flex items-center gap-1.5 rounded-md bg-orange-100 px-2.5 py-1 text-[11px] font-semibold text-orange-700 hover:bg-orange-200 dark:bg-orange-950/60 dark:text-orange-300 dark:hover:bg-orange-900/60 transition-colors shadow-2xs disabled:opacity-60"
+                  title="Query Garmin Connect Personal API for granular FIT file or lap telemetry"
+                >
+                  <RefreshCw className={`h-3 w-3 ${isHydrating ? 'animate-spin' : ''}`} />
+                  <span>{isHydrating ? 'Fetching Telemetry...' : 'Fetch Granular Garmin Splits'}</span>
+                </button>
+              )}
 
               {/* PACE VS HEART RATE LINE GRAPH TOGGLE (Requested by user) */}
               <div className="inline-flex rounded-lg border border-slate-200 p-0.5 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 font-semibold text-xs">
@@ -749,6 +825,19 @@ export const SimilarRunsCard: React.FC<SimilarRunsCardProps> = ({
               </div>
             </div>
           </div>
+
+          {/* Hydration Banner Notification */}
+          {isHydrating && (
+            <div className="mb-3 flex items-center justify-between rounded-lg bg-orange-50/90 px-3 py-2 text-xs text-orange-900 dark:bg-orange-950/40 dark:text-orange-200 border border-orange-200 dark:border-orange-800 animate-pulse">
+              <div className="flex items-center gap-2">
+                <RefreshCw className="h-3.5 w-3.5 animate-spin text-orange-600 dark:text-orange-400 shrink-0" />
+                <span>{hydrationNotice || 'Hydrating authentic lap splits and GPS curves from Garmin Connect...'}</span>
+              </div>
+              <span className="text-[10px] text-orange-700 dark:text-orange-300 font-mono">
+                Calling /download-service/files/activity
+              </span>
+            </div>
+          )}
 
           {/* SVG Line Graph */}
           <div className="relative w-full overflow-hidden">
