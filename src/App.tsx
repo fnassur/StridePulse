@@ -439,26 +439,32 @@ function StridePulseApp() {
       console.log(`[App] Hydrating authentic telemetry for Garmin activity ${workoutToHydrate.id}...`);
       const hydrated = await hydrateGarminActivityTelemetry(cloudAccount, workoutToHydrate);
 
-      const hadNoSplits = (!workoutToHydrate.splits || workoutToHydrate.splits.length < 2);
-      const nowHasSplits = (hydrated.splits && hydrated.splits.length >= 2);
-      const hadNoPts = (!workoutToHydrate.trackPoints || workoutToHydrate.trackPoints.length < 5);
-      const nowHasPts = (hydrated.trackPoints && hydrated.trackPoints.length >= 5);
+      const prevPtsCount = workoutToHydrate.trackPoints?.length || 0;
+      const newPtsCount = hydrated.trackPoints?.length || 0;
+      const prevSplitsCount = workoutToHydrate.splits?.length || 0;
+      const newSplitsCount = hydrated.splits?.length || 0;
 
-      if (nowHasSplits || nowHasPts) {
-        console.log(`[App] Activity ${workoutToHydrate.id} enriched with ${hydrated.splits?.length || 0} splits and ${hydrated.trackPoints?.length || 0} trackpoints!`);
+      const isEnriched = newPtsCount > prevPtsCount || newSplitsCount !== prevSplitsCount || hydrated !== workoutToHydrate;
+
+      if (isEnriched && (newPtsCount >= 5 || newSplitsCount >= 2)) {
+        console.log(`[App] Activity ${workoutToHydrate.id} enriched with ${newSplitsCount} splits and ${newPtsCount} trackpoints!`);
+
+        const freshHydrated = { ...hydrated };
 
         // Update local workout state
-        setWorkouts(prev => prev.map(w => (w.id === hydrated.id ? hydrated : w)));
+        setWorkouts(prev => prev.map(w => (w.id === hydrated.id ? freshHydrated : w)));
         if (selectedWorkout?.id === hydrated.id) {
-          setSelectedWorkout(hydrated);
+          setSelectedWorkout(freshHydrated);
         }
 
         // Persist enriched workout to Cloud Firestore if logged in
         if (user) {
-          saveWorkoutToCloud(user.uid, hydrated).catch(err => {
+          saveWorkoutToCloud(user.uid, freshHydrated).catch(err => {
             console.error('[App] Failed to save hydrated workout to Firestore:', err);
           });
         }
+
+        return freshHydrated;
       }
 
       return hydrated;

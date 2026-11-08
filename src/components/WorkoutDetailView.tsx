@@ -627,7 +627,7 @@ export const WorkoutDetailView: React.FC<WorkoutDetailViewProps> = ({
               </p>
             </div>
             <div className="flex items-center gap-3">
-              {(!workout.splits || workout.splits.length < 2) && (workout.source === 'garmin_cloud' || workout.id.startsWith('garmin_')) && onHydrateWorkout && (
+              {((!workout.splits || workout.splits.length < 2) || (workout.trackPoints || []).length < 10) && (workout.source === 'garmin_cloud' || workout.id.startsWith('garmin_')) && onHydrateWorkout && (
                 <button
                   type="button"
                   disabled={isDetailHydrating}

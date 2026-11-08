@@ -53,6 +53,24 @@ app.use('/api/garmin', async (req, res) => {
   }
 });
 
+// Local uploaded activity asset fallback
+app.get('/api/garmin/local-fit/:activityId', (req, res) => {
+  const { activityId } = req.params;
+  const assetsDir = path.join(__dirname, 'public', 'assets', 'aistudio');
+  try {
+    if (fs.existsSync(assetsDir)) {
+      const files = fs.readdirSync(assetsDir);
+      const match = files.find(f => f.includes(activityId));
+      if (match) {
+        return res.sendFile(path.join(assetsDir, match));
+      }
+    }
+  } catch (err) {
+    console.error('Error finding local activity asset:', err);
+  }
+  return res.status(404).send('Not found');
+});
+
 // Serve Vite build output files
 app.use(express.static(path.join(__dirname, 'dist')));
 
